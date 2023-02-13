@@ -1,0 +1,1108 @@
+---
+title: "pyro.alpha.2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+##read in packages
+```{r}
+library(readr)
+library(ggplot2)
+library(vegan)
+library(phyloseq)
+library(tidyr)
+library(car)
+library(dplyr)
+library(phylosmith)
+library(stringr)
+library(onewaytests)
+```
+
+##read in data
+```{r}
+##spring----
+##data output from qiime2 viewer at species level - assigned to any level with ASVs with frequency 10 or less across all samples removed
+spring_species_10 <- read_csv("level-7-spring.csv") ## 94 obs 801 variables 
+samplenames<-spring_species_10$index 
+spring_species_10<-as.data.frame(spring_species_10[,2:ncol(spring_species_10)])#remove index column
+row.names(spring_species_10)<-samplenames
+
+#substract reads that were present in the negative control
+spring_species_10[,which(spring_species_10[rownames(spring_species_10) == "neg",] > 0)] ## determine which ASVs the negative has reads in
+#2 in Didymella and 4 in geopyxis carbonaria
+
+spring_species_10[,55]<-spring_species_10[,55]-2 #remove the same number of reads from every sample
+spring_species_10[,55]<-ifelse(spring_species_10[,55]<0,0,as.numeric(spring_species_10$`k__Fungi;p__Ascomycota;c__Dothideomycetes;o__Pleosporales;f__Didymellaceae;g__Didymella;s__Didymella_exigua`)) #ensure no ASVs had a negative number of reads
+
+#repeat with other ASV
+spring_species_10[,319]<-spring_species_10[,319]-4
+spring_species_10[,319]<-ifelse(spring_species_10[,319]<0,0,as.numeric(spring_species_10$`k__Fungi;p__Ascomycota;c__Pezizomycetes;o__Pezizales;f__Pyronemataceae;g__Geopyxis;s__Geopyxis_carbonaria`))
+
+row.names(spring_species_10)<-samplenames #rename the rows
+
+spring_species_10[,which(spring_species_10[rownames(spring_species_10) == "neg",] > 0)]   ## check that it worked
+
+##seperate out the metadata: sample-type, sample-date, severity
+meta.data.spring<-spring_species_10[,798:800]
+meta.data.microplots.spring<-meta.data.spring[-which(meta.data.spring$Severity %in% c("mock","morel","neg")),]
+samplenames.microplots<-samplenames[-which(meta.data.spring$Severity %in% c("mock","morel","neg"))]
+
+##reorder severity levels 
+meta.data.microplots.spring$Severity<-ordered(meta.data.microplots.spring$Severity,levels=c("unburnt","surface","medium","med-severe","severe","lp-severe"))
+meta.data.microplots.spring$sample_date<-ordered(meta.data.microplots.spring$sample_date,levels=c("sept","oct","may","june"))
+
+#rename factors 
+meta.data.microplots.spring$Severity <- factor(meta.data.microplots.spring$Severity, labels = c("Unburnt","Low","Medium","Medium-Severe","Severe","LP-Severe"))
+levels(meta.data.microplots.spring$Severity)
+meta.data.microplots.spring$sample_date <- factor(meta.data.microplots.spring$sample_date, labels = c("September","October","May","June"))
+levels(meta.data.microplots.spring$sample_date)
+meta.data.microplots.spring$sample_type<-factor(meta.data.microplots.spring$sample_type,labels = c("Mineral","Surface"))
+levels(meta.data.microplots.spring$sample_type)
+
+##reorder severity levels 
+meta.data.spring$Severity<-ordered(meta.data.spring$Severity,levels=c("unburnt","surface","medium","med-severe","severe","lp-severe"))
+meta.data.spring$sample_date<-ordered(meta.data.spring$sample_date,levels=c("sept","oct","may","june"))
+
+#rename factors 
+meta.data.spring$Severity <- factor(meta.data.spring$Severity, labels = c("Unburnt","Low","Medium","Medium-Severe","Severe","LP-Severe"))
+levels(meta.data.spring$Severity)
+meta.data.spring$sample_date <- factor(meta.data.spring$sample_date, labels = c("September","October","May","June"))
+levels(meta.data.spring$sample_date)
+meta.data.spring$sample_type<-if_else(meta.data.spring$sample_type == "organic","Organic",if_else(meta.data.spring$sample_type == "mineral","Mineral",as.factor(meta.data.spring$sample_type)))
+
+
+
+###Fall----
+fall_species_10 <- read_csv("level-7-fall.csv")
+samplenames.fall<-fall_species_10$index
+fall_species_10<-as.data.frame(fall_species_10[,2:ncol(fall_species_10)])
+rownames(fall_species_10)<-samplenames.fall
+fall_species_10<-fall_species_10[-c(which(rownames(fall_species_10) %in% c("M1A","M2A","M3A","M4A","M8A","O15C"))),] #this is to remove samples which were rerun successfully in the spring
+
+
+#seperate out the metadata: sample-type, sample-date, severity
+meta.data.fall<-fall_species_10[,c(701,702)]
+meta.data.fall<-separate(meta.data.fall,col="sample-type",into=c("sample_type","sample_date"),sep="-")
+meta.data.microplots.fall<-meta.data.fall[-which(meta.data.fall$severity %in% c("mock")),] 
+colnames(meta.data.fall)<-c("sample_type","sample_date","Severity")
+colnames(meta.data.microplots.fall)<-c("sample_type","sample_date","Severity")
+
+
+#order
+meta.data.microplots.fall$Severity<-ordered(meta.data.microplots.fall$Severity,levels=c("unburnt","surface","medium","med-severe","severe"))
+meta.data.microplots.fall$sample_date<-ordered(meta.data.microplots.fall$sample_date,levels=c("sept","oct"))
+
+#rename factors 
+meta.data.microplots.fall$Severity <- factor(meta.data.microplots.fall$Severity, labels = c("Unburnt","Low","Medium","Medium-Severe","Severe"))
+levels(meta.data.microplots.fall$Severity)
+meta.data.microplots.fall$sample_date <- factor(meta.data.microplots.fall$sample_date, labels = c("September","October"))
+levels(meta.data.microplots.fall$sample_date)
+meta.data.microplots.fall$sample_type<-factor(meta.data.microplots.fall$sample_type,labels = c("Mineral","Surface"))
+levels(meta.data.microplots.fall$sample_type)
+
+#order
+meta.data.fall$Severity<-ordered(meta.data.fall$Severity,levels=c("unburnt","surface","medium","med-severe","severe","mock"))
+meta.data.fall$sample_date<-ordered(meta.data.fall$sample_date,levels=c("sept","oct"))
+
+#rename factors 
+meta.data.fall$Severity <- factor(meta.data.fall$Severity, labels = c("Unburnt","Low","Medium","Medium-Severe","Severe","mock"))
+levels(meta.data.fall$Severity)
+meta.data.fall$sample_date <- factor(meta.data.fall$sample_date, labels = c("September","October"))
+levels(meta.data.fall$sample_date)
+meta.data.fall$sample_type<-if_else(meta.data.fall$sample_type == "organic","Organic",if_else(meta.data.fall$sample_type == "mineral","Mineral",as.factor(meta.data.fall$sample_type)))
+```
+
+#read in raw ASV table and taxonomy tables..
+```{r}
+spring.tax<-read_delim("metadata.spring.tsv",delim = "\t")
+fall.tax<-read_delim("metadata.fall.tsv",delim = "\t")
+colnames(spring.tax)<-c("featID","Taxa","Conf")
+colnames(fall.tax)<-c("featID","Taxa","Conf")
+
+spring.asv<-read_delim("spring-features.csv",delim = ";",skip = 1)
+spring.asv.10<-read_delim("spring-features-10.csv",delim = ";",skip = 1) #the .10 suffix means the features with frequency below 10 accross all samples removed...
+fall.asv<-read_delim("fall-features.csv",delim = ";",skip = 1)
+fall.asv.10<-read_delim("fall-features-10.csv",delim = ";",skip = 1)
+
+#make tax files for asv files with low freq ASV removed 
+spring.tax.10<-spring.tax[match(spring.asv.10$`#OTU ID`,spring.tax$featID),]
+fall.tax.10<-fall.tax[match(fall.asv.10$`#OTU ID`,fall.tax$featID),]
+
+#make shared spring and fall ASV tables
+uniq.asv<-as.data.frame(unique(c(fall.tax.10$featID,spring.tax.10$featID)))# end goal is a file with 4489 sequences
+colnames(uniq.asv)<-c("featID")
+length(which(is.element(fall.tax.10$featID,spring.tax.10$featID)==FALSE)) ##964 ASVs in fall but not psring... 
+length(which(is.element(spring.tax.10$featID,fall.tax.10$featID)==FALSE)) ##1960 ASVs in spring but not fall...
+#means 1565 of fall and spring shared... which I should merge into one ASV... 
+
+which(is.element(spring.tax.10$featID,fall.tax.10$featID)==TRUE)
+
+#Make a df with all of the samples with the shared taxa only
+spring.asv.10.m<-spring.asv.10[which(is.element(spring.tax.10$featID,fall.tax.10$featID)==TRUE),]# . m stand for matched
+fall.asv.10.m<-fall.asv.10[which(is.element(fall.tax.10$featID,spring.tax.10$featID)==TRUE),]
+fall.asv.10.um<-fall.asv.10[which(is.element(fall.tax.10$featID,spring.tax.10$featID)==FALSE),] #.um stands for unmatcheed
+spring.asv.10.um<-spring.asv.10[which(is.element(spring.tax.10$featID,fall.tax.10$featID)==FALSE),]
+
+
+spring.asv.10.m<-spring.asv.10.m[match(fall.asv.10.m$`#OTU ID`,spring.asv.10.m$`#OTU ID`),] #make sure the ASVs are in the same order!
+fall.asv.10.m<-fall.asv.10.m[match(fall.asv.10.m$`#OTU ID`,spring.asv.10.m$`#OTU ID`),]
+fall.asv.10.m$`#OTU ID` == spring.asv.10.m$`#OTU ID`
+
+ 
+asv.10.m<-cbind(spring.asv.10.m,fall.asv.10.m) # OTU ID is col # 1 and 96
+
+asv.10.u<-asv.10.m[1:964,]
+asv.10.u[]<-0 # making black df with same column names 
+fall.asv.10.um<-cbind(fall.asv.10.um[,1],asv.10.u[,2:95],fall.asv.10.um)
+colnames(fall.asv.10.um)<-colnames(asv.10.m)
+asv.10.u<-rbind(asv.10.u,asv.10.u,asv.10.u)
+spring.asv.10.um<-cbind(spring.asv.10.um,asv.10.u[1:1960,96:160])
+
+asv.10.m<-rbind(asv.10.m,fall.asv.10.um,spring.asv.10.um)
+#remove second OTU column
+asv.10.m<-asv.10.m[,-96]
+length(unique(asv.10.m$`#OTU ID`))
+
+#remove samples from fall that were rerun in spring and morel samples
+asv.10<-asv.10.m[,-which(colnames(asv.10.m) %in% c("Morel1","Morel2","Morel3","Morel4","M2A.1","M3A.1","O15C.1"))]
+#128 main + 16 LP + 8 mock and neg = 152 columns
+
+rownames(asv.10)<-asv.10$`#OTU ID`
+ASVsID<-asv.10$`#OTU ID`
+asv.10<-asv.10[,-1]
+
+asv.10[which(asv.10[,colnames(asv.10) == "neg"] > 0),] ## determine which ASVs the negative has reads in
+asv.10[4,]<-asv.10[4,]-2 #remove the same number of reads from every sample
+asv.10[4,]<-ifelse(asv.10[4,]<0,0,as.numeric(asv.10[4,])) #ensure no ASVs had a negative number of reads
+asv.10[49,]<-asv.10[49,]-4 #remove the same number of reads from every sample
+asv.10[49,]<-ifelse(asv.10[49,]<0,0,as.numeric(asv.10[49,])) #ensure no ASVs had a negative number of reads
+asv.10[which(asv.10[,colnames(asv.10) == "neg"] > 0),] ## check that it worked!
+
+#make the matching combined taxonomy set
+tax.10<-rbind(spring.tax.10,fall.tax.10)
+tax.10<-unique(tax.10)
+#make the order match that in the asv table
+tax.10<-tax.10[match(tax.10$featID,rownames(asv.10)),]
+
+#create phyloseq object
+phylo.asv<-otu_table(asv.10,taxa_are_rows = TRUE)
+taxa_names(phylo.asv)<-rownames(asv.10)
+sample_names(phylo.asv)<-colnames(asv.10)
+
+#create taxonomy table in OTU format
+tax.ext<-separate(tax.10,col= "Taxa",into = c("Kingdom","Phylum","Class","Order","Family","Genus","Species"),sep = ";")
+phylo.tax.10<-tax_table(tax.ext[,2:8])
+taxa_names(phylo.tax.10)<-rownames(asv.10)
+
+#make sample meta data
+#need common spring and fall metadata
+rownames(meta.data.fall)<-c(rownames(meta.data.fall[1:27,]),"mock1.1","mock2.1","mock3.1",rownames(meta.data.fall[31:61,]))
+meta.data.fall$sample_name<-rownames(meta.data.fall)
+meta.data.spring$sample_name<-rownames(meta.data.spring)
+meta.data<-rbind(meta.data.fall,meta.data.spring)#combine spring and fall
+meta.data<-meta.data[-which(meta.data$sample_name %in% c("Morel1","Morel2","Morel3","Morel4")),]#remove morel samples
+meta.data<-meta.data[match(colnames(asv.10),meta.data$sample_name),]#put in same order as asv table
+
+phylo.meta<-sample_data(meta.data[,1:3])
+sample_names(phylo.meta)<-meta.data$sample_name
+
+#now merge species, taxonomy, and metadata
+phylo.10<-phyloseq(phylo.asv,phylo.tax.10,phylo.meta)
+phylo.10<-subset_samples(phylo.10, Severity != "neg")#remove neg
+phylo.10
+
+```
+
+
+#create phyloseq objects
+```{r}
+##spring ----
+##modify data sheet to fit format - taxa must be rows 
+species.data.otu.spring<-t(spring_species_10[,1:797])
+
+##create the species data 
+phylo.species.spring<-otu_table(species.data.otu.spring,taxa_are_rows = TRUE)
+taxa_names(phylo.species.spring)<-colnames(spring_species_10[,1:797])
+sample_names(phylo.species.spring)<-rownames(spring_species_10)
+
+#create taxonomy table in OTU format
+taxa.spring<-as.data.frame(colnames(spring_species_10[,1:797]))
+colnames(taxa.spring)<-"full.taxa"
+taxa.spring<-separate(taxa.spring,col= "full.taxa",into = c("Kingdom","Phylum","Class","Order","Family","Genus","Species"),sep = ";")
+
+phylo.taxonomy.spring<-tax_table(taxa.spring)
+taxa_names(phylo.taxonomy.spring)<-colnames(spring_species_10[,1:797])
+
+#make sample meta data
+phylo.sample.meta.spring<-sample_data(meta.data.spring)
+sample_names(phylo.sample.meta.spring)<-row.names(spring_species_10)
+
+
+#now merge species, taxonomy, and metadata
+phylo.spring<-phyloseq(phylo.species.spring,phylo.taxonomy.spring,phylo.sample.meta.spring)
+phylo.spring
+
+# redo but without mock, morel, neg samples
+microplot.data.otu.spring<-species.data.otu.spring[1:797,-c(38:45)]
+microplot.taxa.spring<-otu_table(microplot.data.otu.spring,taxa_are_rows = TRUE)
+phylo.sample.meta.spring.microplots<-sample_data(meta.data.microplots.spring)
+sample_names(microplot.taxa.spring)<-samplenames.microplots
+sample_names(phylo.sample.meta.spring.microplots)<-samplenames.microplots
+
+phylo.spring.2<-phyloseq(microplot.taxa.spring,phylo.taxonomy.spring,phylo.sample.meta.spring.microplots)
+
+##Fall----
+##modify data sheet to fit format - taxa must be rows 
+species.data.otu.fall<-t(fall_species_10[,1:700])
+View(species.data.otu.fall)
+
+##create species data
+phylo.taxa.fall<-otu_table(species.data.otu.fall,taxa_are_rows = TRUE)
+
+
+#create taxonomy table 
+taxa.fall<-as.data.frame(colnames(fall_species_10[,1:700]))
+colnames(taxa.fall)<-"full.taxa"
+taxa.fall<-separate(taxa.fall,col= "full.taxa",into = c("Kingdom","Phylum","Class","Order","Family","Genus","Species"),sep = ";")
+
+
+phylo.taxonomy.fall<-tax_table(taxa.fall)
+taxa_names(phylo.taxonomy.fall)<-colnames(fall_species_10[,1:700])
+
+#make sample data
+phylo.sample.meta.fall<-sample_data(meta.data.fall)
+phylo.sample.meta.fall
+sample_names(phylo.sample.meta.fall)<-row.names(fall_species_10)
+sample_names(phylo.taxa.fall)<-row.names(fall_species_10)
+
+#now merge
+phylo.fall<-phyloseq(phylo.taxa.fall,phylo.taxonomy.fall,phylo.sample.meta.fall)
+phylo.fall
+
+# redo but without mock samples
+microplot.data.otu.fall<-as.data.frame(fall_species_10[-which(rownames(fall_species_10) %in% c("mock1","mock2","mock3")) ,1:700])
+microplot.data.otu.fall<-t(microplot.data.otu.fall)
+microplot.taxa.fall<-otu_table(microplot.data.otu.fall,taxa_are_rows = TRUE)
+phylo.sample.meta.fall.microplots<-sample_data(meta.data.microplots.fall)
+sample_names(phylo.sample.meta.fall.microplots)<-samplenames.fall[-which(samplenames.fall %in% c("mock1","mock2","mock3","O15C","M1A","M2A","M3A","M4A","M8A"))]
+sample_names(microplot.taxa.fall)<-samplenames.fall[-which(samplenames.fall %in% c("mock1","mock2","mock3","O15C","M1A","M2A","M3A","M4A","M8A"))]
+taxa_names(phylo.taxonomy.fall)<-colnames(fall_species_10[-which(rownames(fall_species_10) %in% c("mock1","mock2","mock3")) ,1:700])
+
+phylo.fall.2<-phyloseq(microplot.taxa.fall,phylo.taxonomy.fall,phylo.sample.meta.fall.microplots)
+
+###now merge spring and fall without mock ----
+master.phylo<-merge_phyloseq(phylo.spring.2,phylo.fall.2)
+sample_data(master.phylo)
+
+#clean out taxa that were only present in mock or failed smaples etc... 
+alltaxa.master<-otu_table(master.phylo)
+goodtaxa.master<-alltaxa.master[-which(rowSums(otu_table(master.phylo)) == 0),]
+goodtaxa.master<-otu_table(goodtaxa.master,taxa_are_rows = TRUE)
+taxa.good.master<-as.data.frame(rownames(goodtaxa.master))
+colnames(taxa.good.master)<-"full.taxa"
+taxa.good.master<-separate(taxa.good.master,col= "full.taxa",into = c("Kingdom","Phylum","Class","Order","Family","Genus","Species"),sep = ";")
+good.taxonomy.master<-tax_table(taxa.good.master)
+taxa_names(good.taxonomy.master)<-rownames(goodtaxa.master)
+sd.master<-sample_data(master.phylo)
+master.phylo<-merge_phyloseq(sd.master,goodtaxa.master,good.taxonomy.master)
+master.phylo
+
+##write merged OTU table 
+master.otu<-otu_table(master.phylo)
+master.otu<-as.data.frame(master.otu)
+master.otu$taxonomy<-row.names(master.otu)
+#write_csv(master.otu,"master.otu.table.raw.feb5.2023.csv")
+#write_csv(master.otu.hel,"master.otu.table.hel.sept21.2021.csv")
+```
+
+#mock community
+```{r}
+#create subset with only mock then merge spring and fall 
+mock.com.spring<-subset_samples(phylo.spring,sample_type=="mock")
+sample_names(mock.com.spring)<-c("mock4","mock5","mock6")
+mock.com.fall<-subset_samples(phylo.fall,sample_type=="mock")
+
+mock.com<-merge_phyloseq(mock.com.spring,mock.com.fall)
+
+summary(colSums(otu_table(mock.com)))
+
+##create relative abundance data
+taxa.15.mock <- prune_taxa(names(sort(taxa_sums(mock.com),TRUE)[1:15]), mock.com) #prune to only the top 15 most abundant taxa
+phylo.rel.abundance.mock<-transform_sample_counts(taxa.15.mock,function(x){x/sum(x)})#convert to relative abundance
+
+## can play around with "x=" to see different groupings or with "fill=" to see different taxonomic levels 
+plot_bar(phylo.rel.abundance.mock,fill = "ta7")+geom_bar(aes(color = ta7, fill = ta7), stat = "identity", position = "stack") +
+  labs( y = "Relative Abundance\n")+
+  theme(panel.background = element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank())
+
+#get proportions
+gen.propor.mock<-taxa_proportions(mock.com,"ta6",treatment = "sample")
+spe.propor.mock<-taxa_proportions(mock.com,"ta7",treatment = "sample")
+gen.propor.mock<-dplyr::filter(gen.propor.mock, gen.propor.mock$Proportion > 0)
+spe.propor.mock<-dplyr::filter(spe.propor.mock, spe.propor.mock$Proportion > 0)
+View(gen.propor.mock)
+View(spe.propor.mock)
+
+
+mean.russ<-dplyr::filter(gen.propor.mock, gen.propor.mock$ta6 == 'g__Russula')#create subset of only russla
+mean.russ<-mean.russ[1:4,]
+mean(mean.russ$Proportion)
+sd(mean.russ$Proportion)
+
+mean.ceno<-dplyr::filter(gen.propor.mock, gen.propor.mock$ta6 == 'g__Cenococcum')
+mean.ceno<-mean.ceno[1:4,]
+mean(mean.ceno$Proportion)
+sd(mean.ceno$Proportion)
+
+mean.tome<-dplyr::filter(gen.propor.mock, gen.propor.mock$ta6 == 'g__Tomentella')
+mean.tome<-mean.tome[1:4,]
+mean(mean.tome$Proportion)
+sd(mean.tome$Proportion)
+
+mean.spha<-dplyr::filter(gen.propor.mock, gen.propor.mock$ta6 == 'g__Sphaerosporella')
+mean.spha<-mean.spha[1:4,]
+mean(mean.spha$Proportion)
+sd(mean.spha$Proportion)
+
+mean.wmik<-dplyr::filter(spe.propor.mock, spe.propor.mock$ta7 == 's__Wilcoxina_mikolae')
+mean.wmik<-mean.wmik[1:4,]
+mean(mean.wmik$Proportion)
+sd(mean.wmik$Proportion)
+
+mean.wreh<-dplyr::filter(spe.propor.mock, spe.propor.mock$ta7 == 's__Wilcoxina_rehmii')
+mean.wreh<-mean.wreh[1:4,]
+mean(mean.wreh$Proportion)
+sd(mean.wreh$Proportion)
+
+#pustularia - only identified to family therefore cannot seperate out from genus aggreated data
+#taxa_names(mock.com)
+pust.abun<-get_sample(mock.com, "k__Fungi;p__Ascomycota;c__Pezizomycetes;o__Pezizales;f__Pyronemataceae;g__unidentified;s__unidentified")
+propor.pust<-pust.abun/colSums(otu_table(mock.com))# convert to realtive abundance 
+propor.pust<-propor.pust[c(-2,-3)]
+mean(propor.pust)
+sd(propor.pust)
+
+mean.mock<-as.numeric(c(mean(mean.wreh$Proportion),mean(mean.wmik$Proportion),mean(mean.spha$Proportion),mean(mean.tome$Proportion),mean(mean.ceno$Proportion),mean(mean.russ$Proportion),mean(propor.pust),0.04))
+names<-c("Wilcoxina rehmii","Wilcoxina mikolae","Sphaerosporella brunnea","Tomentella bryophila", "Cenococcum geophilum","Russula olivobrunnea","Pustularia sp.","False Positives")
+se<-as.numeric(c(sd(mean.wreh$Proportion),sd(mean.wmik$Proportion),sd(mean.spha$Proportion),sd(mean.tome$Proportion),sd(mean.ceno$Proportion),sd(mean.russ$Proportion),sd(propor.pust),0))
+type<-rep("mock",8)
+mean.mock<-data.frame(mean.mock,se,names,type)
+mean.mock$names<-factor(mean.mock$names, levels = c("Cenococcum geophilum", "Pustularia sp.","Russula olivobrunnea", "Sphaerosporella brunnea","Tomentella bryophila","Wilcoxina mikolae","Wilcoxina rehmii", "False Positives" ),ordered = TRUE)
+str(mean.mock)
+summary(mean.mock)
+
+
+##determining the proportion of everything else present
+1-(mean(mean.wreh$Proportion)+mean(mean.wmik$Proportion)+mean(mean.spha$Proportion)+mean(mean.tome$Proportion)+mean(mean.ceno$Proportion)+mean(mean.russ$Proportion)+mean(propor.pust))
+#4%
+
+ggplot(mean.mock,aes(fill=names,y=mean.mock,x=type))+geom_col(position="stack",width = 2)+labs(x="",y="Proportion of reads")+scale_color_manual(aesthetics = "fill", values = c("lawngreen","sienna3","darkolivegreen","peru","cornflowerblue","pink2","pink4","gold"))
+```
+
+##relative abundance plotting 
+```{r}
+
+##create relative abundance data
+phylo.rel.abundance<-transform_sample_counts(master.phylo,function(x){x/sum(x)})
+plot_bar(phylo.rel.abundance,fill = "ta6")
+
+# can prune taxa to view better 
+taxa.100 <- prune_taxa(names(sort(taxa_sums(master.phylo),TRUE)[1:100]), master.phylo)
+taxa.50 <- prune_taxa(names(sort(taxa_sums(master.phylo),TRUE)[1:50]), master.phylo)
+
+## can play around with "x=" to see different groupings or with "fill=" to see different taxonomic levels 
+phylo.rel.abundance<-transform_sample_counts(taxa.50,function(x){x/sum(x)})
+plot_bar(phylo.rel.abundance,fill = "ta6")+geom_bar(aes(color = ta6, fill = ta6), stat = "identity", position = "stack") +
+  labs( y = "Relative Abundance\n") + facet_wrap(~ Severity, scales = "free")+
+  theme(panel.background = element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank())
+
+```
+
+#sequence data stats
+```{r}
+#total number of sequences out of bioinformatics pipeline
+sum(otu_table(master.phylo))
+master.phylo
+
+
+#mean and range of reads
+count.asvs<-otu_table(master.phylo)
+summary(colSums(count.asvs)) #37560.28 reads per sample 
+sd(colSums(count.asvs)) #27194.73 SD
+mean(colSums(count.asvs))
+
+#mean and range of asvs
+class(count.asvs)<-NULL
+count.asvs[count.asvs > 0] <- 1
+summary(colSums(count.asvs)) #101.92
+sd(colSums(count.asvs)) #46.40 SD
+
+#number of each taxonmic level
+get_taxa_unique(master.phylo,"ta2")
+length(get_taxa_unique(master.phylo,"ta3"))
+length(get_taxa_unique(master.phylo,"ta4"))
+length(get_taxa_unique(master.phylo,"ta5"))
+length(get_taxa_unique(master.phylo,"ta6"))
+length(get_taxa_unique(master.phylo,"ta7"))
+
+#write.csv(tax_table(master.phylo), "tax.table.sept7.2021.csv")
+
+#most abundant by reads total
+count.reads<-otu_table(master.phylo)
+which(rowSums(count.reads) == max(rowSums(count.reads)))
+pyro.abun<-get_sample(master.phylo, "k__Fungi;p__Ascomycota;c__Pezizomycetes;o__Pezizales;f__Pyronemataceae;g__Pyronema;s__Pyronema_domesticum")
+#max = 891847 - pyronema domesticum
+sum(pyro.abun)/sum(otu_table(master.phylo))
+#17% of all reads 
+
+#most present across all samples 
+count.reads[count.reads>0]<-1# convert to presence absence data 
+which(rowSums(count.reads) == max(rowSums(count.reads))) # identify which is the highest
+max(rowSums(count.reads))
+#max= 134 order helotioles no classification to genus or species 
+
+##add burn status
+# create metadata variable where severe, med-severe, medium, surface all = burnt 
+meta.data.microplots.fall$burn.status<-ifelse(meta.data.microplots.fall$Severity=="Severe","Burnt",if_else(meta.data.microplots.fall$Severity=="Medium-Severe","Burnt",if_else(meta.data.microplots.fall$Severity=="Medium","Burnt",if_else(meta.data.microplots.fall$Severity=="Low","Burnt",if_else(meta.data.microplots.fall$Severity=="Unburnt","Unburnt",NA_character_)))))
+
+meta.data.microplots.spring$burn.status<-ifelse(meta.data.microplots.spring$Severity=="LP-Severe","Burnt",ifelse(meta.data.microplots.spring$Severity=="Severe","Burnt",if_else(meta.data.microplots.spring$Severity=="Medium-Severe","Burnt",if_else(meta.data.microplots.spring$Severity=="Medium","Burnt",if_else(meta.data.microplots.spring$Severity=="Low","Burnt",if_else(meta.data.microplots.spring$Severity=="Unburnt","Unburnt",NA_character_))))))
+
+
+##read in new meta.data to phyloseq
+phylo.sample.meta.fall.status<-sample_data(meta.data.microplots.fall)
+phylo.sample.meta.spring.status<-sample_data(meta.data.microplots.spring)
+sample_names(phylo.sample.meta.spring.status)<-sample_names(phylo.sample.meta.spring.microplots)
+sample_names(phylo.sample.meta.fall.status)<-sample_names(phylo.sample.meta.fall.microplots)
+phylo.fall.2<-phyloseq(microplot.taxa.fall,phylo.taxonomy.fall,phylo.sample.meta.fall.status)
+phylo.spring.2<-phyloseq(microplot.taxa.spring,phylo.taxonomy.spring,phylo.sample.meta.spring.status)
+
+master.phylo<-merge_phyloseq(phylo.spring.2,phylo.fall.2)
+sample_data(master.phylo)
+
+master.phylo.2.lp<-subset_samples(master.phylo, Severity != "LP-Severe") # first create phylo with no LP
+
+#check which taxa are unique to each month or type etc
+#first create phylo object with no zero taxa --- for only the burnt microplots!
+phylo.sept<-subset_samples(master.phylo.2.lp, sample_date == "September")
+phylo.sept
+alltaxa.sept<-otu_table(phylo.sept)
+goodtaxa.sept<-alltaxa.sept[-which(rowSums(otu_table(phylo.sept)) == 0),]
+goodtaxa.sept<-otu_table(goodtaxa.sept,taxa_are_rows = TRUE)
+taxa.good.sept<-as.data.frame(rownames(goodtaxa.sept))
+colnames(taxa.good.sept)<-"full.taxa"
+taxa.good.sept<-separate(taxa.good.sept,col= "full.taxa",into = c("Kingdom","Phylum","Class","Order","Family","Genus","Species"),sep = ";")
+good.taxonomy.sept<-tax_table(taxa.good.sept)
+taxa_names(good.taxonomy.sept)<-rownames(goodtaxa.sept)
+sd.sept<-sample_data(phylo.sept)
+phylo.sept<-merge_phyloseq(sd.sept,goodtaxa.sept,good.taxonomy.sept)
+phylo.sept
+
+#oct
+phylo.oct<-subset_samples(master.phylo, sample_date == "October")
+phylo.oct
+alltaxa.oct<-otu_table(phylo.oct)
+goodtaxa.oct<-alltaxa.oct[-which(rowSums(otu_table(phylo.oct)) == 0),]
+goodtaxa.oct<-otu_table(goodtaxa.oct,taxa_are_rows = TRUE)
+taxa.good.oct<-as.data.frame(rownames(goodtaxa.oct))
+colnames(taxa.good.oct)<-"full.taxa"
+taxa.good.oct<-separate(taxa.good.oct,col= "full.taxa",into = c("Kingdom","Phylum","Class","Order","Family","Genus","Species"),sep = ";")
+good.taxonomy.oct<-tax_table(taxa.good.oct)
+taxa_names(good.taxonomy.oct)<-rownames(goodtaxa.oct)
+sd.oct<-sample_data(phylo.oct)
+phylo.oct<-merge_phyloseq(sd.oct,goodtaxa.oct,good.taxonomy.oct)
+phylo.oct
+
+#may
+phylo.may<-subset_samples(master.phylo.2.lp, sample_date == "May")
+phylo.may
+alltaxa.may<-otu_table(phylo.may)
+goodtaxa.may<-alltaxa.may[-which(rowSums(otu_table(phylo.may)) == 0),]
+goodtaxa.may<-otu_table(goodtaxa.may,taxa_are_rows = TRUE)
+taxa.good.may<-as.data.frame(rownames(goodtaxa.may))
+colnames(taxa.good.may)<-"full.taxa"
+taxa.good.may<-separate(taxa.good.may,col= "full.taxa",into = c("Kingdom","Phylum","Class","Order","Family","Genus","Species"),sep = ";")
+good.taxonomy.may<-tax_table(taxa.good.may)
+taxa_names(good.taxonomy.may)<-rownames(goodtaxa.may)
+sd.may<-sample_data(phylo.may)
+phylo.may<-merge_phyloseq(sd.may,goodtaxa.may,good.taxonomy.may)
+phylo.may
+
+#june
+phylo.june<-subset_samples(master.phylo.2.lp, sample_date == "June")
+phylo.june
+alltaxa.june<-otu_table(phylo.june)
+goodtaxa.june<-alltaxa.june[-which(rowSums(otu_table(phylo.june)) == 0),]
+goodtaxa.june<-otu_table(goodtaxa.june,taxa_are_rows = TRUE)
+taxa.good.june<-as.data.frame(rownames(goodtaxa.june))
+colnames(taxa.good.june)<-"full.taxa"
+taxa.good.june<-separate(taxa.good.june,col= "full.taxa",into = c("Kingdom","Phylum","Class","Order","Family","Genus","Species"),sep = ";")
+good.taxonomy.june<-tax_table(taxa.good.june)
+taxa_names(good.taxonomy.june)<-rownames(goodtaxa.june)
+sd.june<-sample_data(phylo.june)
+phylo.june<-merge_phyloseq(sd.june,goodtaxa.june,good.taxonomy.june)
+phylo.june
+
+#mean and range of reads and SHs by sequencing round
+count.asvs.may<-otu_table(phylo.may)
+count.asvs.may[count.asvs.may>0]<-1
+summary(colSums(count.asvs.may)) #mean 106 ASVs per sample 
+sd(colSums(count.asvs.may)) #40.82 SD
+count.asvs.june<-otu_table(phylo.june)
+count.asvs.june[count.asvs.june>0]<-1
+summary(colSums(count.asvs.june)) #mean 114 ASVs per sample 
+sd(colSums(count.asvs.june))#56.13 SD
+count.asvs.oct<-otu_table(phylo.oct)
+count.asvs.oct[count.asvs.oct>0]<-1
+summary(colSums(count.asvs.oct)) #mean 114 ASVs per sample 
+sd(colSums(count.asvs.oct)) #39.05
+count.asvs.sept<-otu_table(phylo.sept)
+count.asvs.sept[count.asvs.sept>0]<-1
+summary(colSums(count.asvs.sept)) #mean 105 ASVs per sample 
+sd(colSums(count.asvs.sept)) #49.57 SD
+
+#how many reads per sample average across burnt or unburnt samples 
+count.asvs.may<-otu_table(subset_samples(phylo.may, burn.status == "Burnt"))
+count.asvs.may[count.asvs.may>0]<-1
+summary(colSums(count.asvs.may)) #mean 99 ASVs per sample 
+sd(colSums(count.asvs.may)) #35.11 SD
+count.asvs.june<-otu_table(subset_samples(phylo.june, burn.status == "Burnt"))
+count.asvs.june[count.asvs.june>0]<-1
+summary(colSums(count.asvs.june)) #mean 97.96 ASVs per sample 
+sd(colSums(count.asvs.june))#40.35 SD
+count.asvs.oct<-otu_table(subset_samples(phylo.oct, burn.status == "Burnt"))
+count.asvs.oct[count.asvs.oct>0]<-1
+summary(colSums(count.asvs.oct)) #mean 99.08 ASVs per sample 
+sd(colSums(count.asvs.oct)) #33.19
+count.asvs.sept<-otu_table(subset_samples(phylo.sept, burn.status == "Burnt"))
+count.asvs.sept[count.asvs.sept>0]<-1
+summary(colSums(count.asvs.sept)) #mean 57.00 ASVs per sample 
+sd(colSums(count.asvs.sept)) #37.82 SD
+
+
+count.asvs.sept.m.ms.s<-otu_table(subset_samples(phylo.sept, Severity != "Low")) ##only the highest severty levels 
+count.asvs.sept.m.ms.s[count.asvs.sept.m.ms.s>0]<-1
+summary(colSums(count.asvs.sept.m.ms.s)) 
+sd(colSums(count.asvs.sept.m.ms.s)) 
+count.asvs.oct.m.ms.s<-otu_table(subset_samples(phylo.oct, Severity != "Low")) ##only the highest severty levels 
+count.asvs.oct.m.ms.s[count.asvs.oct.m.ms.s>0]<-1
+summary(colSums(count.asvs.oct.m.ms.s)) 
+sd(colSums(count.asvs.oct.m.ms.s)) 
+
+count.asvs.may<-otu_table(subset_samples(phylo.may, burn.status == "Unburnt"))
+count.asvs.may[count.asvs.may>0]<-1
+summary(colSums(count.asvs.may)) 
+sd(colSums(count.asvs.may)) 
+count.asvs.june<-otu_table(subset_samples(phylo.june, burn.status == "Unburnt"))
+count.asvs.june[count.asvs.june>0]<-1
+summary(colSums(count.asvs.june)) 
+sd(colSums(count.asvs.june))
+count.asvs.oct<-otu_table(subset_samples(phylo.oct, burn.status == "Unburnt"))
+count.asvs.oct[count.asvs.oct>0]<-1
+summary(colSums(count.asvs.oct))  
+sd(colSums(count.asvs.oct)) 
+count.asvs.sept<-otu_table(subset_samples(phylo.sept, burn.status == "Unburnt"))
+count.asvs.sept[count.asvs.sept>0]<-1
+summary(colSums(count.asvs.sept)) 
+sd(colSums(count.asvs.sept)) 
+
+#now can check for uniques in the taxa tables
+
+so.diff<-setdiff(taxa_names(phylo.sept),taxa_names(phylo.oct))
+os.diff<-setdiff(taxa_names(phylo.oct),taxa_names(phylo.sept))
+so.diff## all in september but not oct
+#^ 70 taxa
+os.diff ## all in oct but not sept
+#^ 185 taxa 
+is.element(so.diff,taxa_names(phylo.sept)) 
+som.diff<-setdiff(so.diff,taxa_names(phylo.may))
+som.diff ## all in spt but not oct or may 
+#^ 45 taxa
+is.element(som.diff,taxa_names(phylo.sept))  
+somj.diff<-setdiff(som.diff,taxa_names(phylo.june))
+somj.diff
+#^ 35 taxa present only in septmebr 
+#confirmation 
+is.element(somj.diff,taxa_names(phylo.may))
+is.element(somj.diff,taxa_names(phylo.oct))
+is.element(somj.diff,taxa_names(phylo.june))
+is.element(somj.diff,taxa_names(phylo.sept))
+
+
+om.diff<-setdiff(taxa_names(phylo.oct),taxa_names(phylo.may))
+om.diff # in oct but not may
+#^165 taxa
+omj.diff<-setdiff(om.diff,taxa_names(phylo.june))
+omj.diff #in oct but not in may or june 
+#^118 taxa
+
+fall.unique<-c(somj.diff,omj.diff)
+
+#check proportions of taxa at different taxonomic levels per sample
+fam.propor<-taxa_proportions(master.phylo,"ta5",treatment = "sample")
+fam.propor<-dplyr::filter(fam.propor, fam.propor$Proportion > 0)
+
+
+gen.propor<-taxa_proportions(master.phylo,"ta6",treatment = "sample")
+gen.propor.pres<-dplyr::filter(gen.propor, gen.propor$Proportion > 0) #only samples where it is present
+
+
+burnt.master.phylo<-subset_samples(master.phylo, Severity != "Unburnt")
+gen.propor.burnt<-taxa_proportions(burnt.master.phylo,"ta6",treatment = "sample")
+gen.propor.burnt.pres<-dplyr::filter(gen.propor.burnt, gen.propor.burnt$Proportion > 0)
+
+
+gen.propor[ta6 == "g__Basidioascus",] 
+mean(gen.propor[ta6 == "g__Basidioascus",]$Proportion) 
+mean(gen.propor.burnt[ta6 == "g__Basidioascus",]$Proportion) 
+mean(gen.propor[ta6 == "g__Pyronema",]$Proportion ) 
+mean(gen.propor.burnt[ta6 == "g__Pyronema",]$Proportion ) 
+mean(gen.propor[ta6 == "g__Morchella",]$Proportion ) 
+mean(gen.propor.burnt[ta6 == "g__Morchella",]$Proportion ) 
+```
+
+#reads per sample accross treatments 
+```{r}
+sampling.depth<-cbind(colSums(otu_table(master.phylo)),sample_data(master.phylo))
+colnames(sampling.depth)<- c("totalreads","Severity","sample_date","sample_type","Burn.status")
+sampling.depth$Burn.status<-as.factor(sampling.depth$Burn.status)
+plot(sampling.depth$totalreads~sampling.depth$Severity)
+plot(sampling.depth$totalreads~sampling.depth$sample_date)
+plot(sampling.depth$totalreads~sampling.depth$sample_type)
+plot(sampling.depth$totalreads~sampling.depth$Burn.status)
+
+mean(sampling.depth[sampling.depth$sample_date == "October",]$totalreads)
+mean(sampling.depth[sampling.depth$sample_date == "September",]$totalreads)
+
+```
+
+
+##specific taxa stats
+```{r}
+morch.sex<-get_sample(genus_data, "g__Morchella")
+morch.sex<-cbind(morch.sex,sample_data(master.phylo))
+View(morch.sex)
+292/sum(morch.sex$morch.sex)*100
+#0.78%
+
+morch.geop<-get_sample(genus_data, "g__Geopyxis")
+morch.geop<-cbind(morch.geop,sample_data(genus_data))
+View(morch.geop)
+180/sum(morch.geop$morch.geop)*100
+#0.04%
+
+morch.tric<-get_sample(genus_data, "g__Tricharina")
+morch.tric<-cbind(morch.tric,sample_data(genus_data))
+View(morch.tric)
+
+morch.fusc<-get_sample(genus_data, "g__Fusicladium")
+morch.fusc<-cbind(morch.fusc,sample_data(genus_data))
+View(morch.fusc)
+22/sum(morch.fusc$morch.fusc)*100
+#0.02%
+
+aure<-get_sample(genus_data,"g__Aureobasidium")
+aure<-cbind(aure,sample_data(genus_data))
+View(aure)
+34/sum(aure$aure)*100
+#0.71%
+sum(aure$aure)/sum(colSums(otu_table(genus_data)))*100
+
+filo<-get_sample(genus_data,"g__Filobasidium")
+filo<-cbind(filo,sample_data(genus_data))
+sum(filo$filo)/sum(colSums(otu_table(genus_data)))*100
+View(filo)
+
+cont<-get_sample(genus_data,"g__Coniothyrium")
+cont<-cbind(cont,sample_data(genus_data))
+View(cont)
+sum(cont$cont)/sum(colSums(otu_table(genus_data)))*100
+
+conio<-get_sample(genus_data,"g__Coniochaeta")
+conio<-cbind(conio,sample_data(genus_data))
+View(conio)
+971/sum(conio$conio)*100
+#1.29%
+sum(conio$conio)/sum(colSums(otu_table(genus_data)))*100
+
+uden<-get_sample(genus_data,"g__Udeniomyces")
+uden<-cbind(uden,sample_data(genus_data))
+View(uden)
+7/sum(uden$uden)*100
+#0.19%
+sum(uden$uden)/sum(colSums(otu_table(genus_data)))*100
+
+dios<-get_sample(genus_data,"g__Dioszegia")
+dios<-cbind(dios,sample_data(genus_data))
+View(dios)
+18/sum(dios$dios)*100
+#0.58%
+sum(dios$dios)/sum(colSums(otu_table(genus_data)))*100
+
+vish<-get_sample(genus_data,"g__Vishniacozyma")
+vish<-cbind(vish,sample_data(genus_data))
+View(vish)
+561/sum(vish$vish)*100
+#1.90%
+sum(vish$vish)/sum(colSums(otu_table(genus_data)))*100
+
+mycos<-get_sample(genus_data,"g__Mycosphaerella")
+mycos<-cbind(mycos,sample_data(genus_data))
+View(mycos)
+1143/sum(mycos$mycos)*100
+#2.15%
+sum(mycos$mycos)/sum(colSums(otu_table(genus_data)))*100
+
+alter<-get_sample(genus_data,"g__Alternaria")
+alter<-cbind(alter,sample_data(genus_data))
+View(alter)
+41/sum(alter$alter)*100
+#0.17%
+sum(alter$alter)/sum(colSums(otu_table(genus_data)))*100
+
+holt<-get_sample(genus_data,"g__Holtermanniella")
+holt<-cbind(holt,sample_data(genus_data))
+View(holt)
+361/sum(holt$holt)*100
+#1.75%
+sum(holt$holt)/sum(colSums(otu_table(genus_data)))*100
+
+naga<-get_sample(genus_data,"g__Naganishia")
+naga<-cbind(naga,sample_data(genus_data))
+View(naga)
+229/sum(naga$naga)*100
+#1.06%
+sum(naga$naga)/sum(colSums(otu_table(genus_data)))*100
+
+pyron<-get_sample(genus_data,"g__Pyronema")
+pyron<-cbind(pyron,sample_data(genus_data))
+View(pyron)
+107/sum(pyron$pyron)*100
+#0.01%
+se.mean.sum.pyron<-summarySEwithin(data=pyron,measurevar = "pyron",withinvars = c("Severity","sample_date"),idvar = "Severity",conf.interval = 0.95)
+View(se.mean.sum.pyron)
+
+pyron.sept<-get_sample(phylo.sept,"k__Fungi;p__Ascomycota;c__Pezizomycetes;o__Pezizales;f__Pyronemataceae;g__Pyronema;s__Pyronema_domesticum")
+pyron.sept<-cbind(pyron.sept,sample_data(phylo.sept))
+View(pyron.sept[pyron.sept$Severity != "Unburnt",])
+sept.burnt.pyron<-pyron.sept[pyron.sept$Severity != "Unburnt",]
+sum(pyron.sept$pyron.sept)/sum(colSums(otu_table(phylo.sept)))*100
+#38.9%
+sum(sept.burnt.pyron$pyron.sept)/sum(colSums(otu_table(subset_samples(phylo.sept,Severity != "Unburnt"))))*100
+
+pyron.d<-get_sample(master.phylo,"k__Fungi;p__Ascomycota;c__Pezizomycetes;o__Pezizales;f__Pyronemataceae;g__Pyronema;s__Pyronema_domesticum")
+pyron.d<-cbind(pyron.d,sample_data(master.phylo))
+View(pyron.d)
+107/sum(pyron$pyron)*100
+#0.01%
+
+rhizo<-get_sample(genus_data,"g__Rhizopogon")
+rhizo<-cbind(rhizo,sample_data(genus_data))
+View(rhizo)
+se.mean.sum.rhizo<-summarySEwithin(data=rhizo,measurevar = "rhizo",withinvars = c("Severity","sample_date"),idvar = "Severity",conf.interval = 0.95)
+View(se.mean.sum.rhizo)
+
+junc<-get_sample(genus_data,"g__Juncaceicola")
+junc<-cbind(junc,sample_data(genus_data))
+View(junc)
+sum(junc$junc)/sum(colSums(otu_table(genus_data)))*100
+
+neur<-get_sample(genus_data,"g__Neurospora")
+neur<-cbind(neur,sample_data(genus_data))
+View(neur)
+sum(neur$neur)/sum(colSums(otu_table(genus_data)))*100
+
+peziz<-get_sample(genus_data,"g__Peziza")
+peziz<-cbind(peziz,sample_data(genus_data))
+View(peziz)
+sum(peziz$peziz)/sum(colSums(otu_table(genus_data)))*100
+
+sait<-get_sample(genus_data,"g__Saitoella")
+sait<-cbind(sait,sample_data(genus_data))
+View(sait)
+sum(sait$sait)/sum(colSums(otu_table(genus_data)))*100
+
+horm<-get_sample(genus_data,"g__Hormonema")
+horm<-cbind(horm,sample_data(genus_data))
+View(horm)
+126/sum(horm$horm)*100
+#0.77%
+sum(horm$horm)/sum(colSums(otu_table(genus_data)))*100
+
+##average percent of unburnt reads
+ub.reads<-c(0.77,0.01,1.06,1.75,0.17,2.15,1.90,0.58,0.19,1.29,0.71,0.02,0.04,0.78)
+mean(ub.reads)
+#0.82%
+sd(ub.reads)
+#0.72
+length(ub.reads)
+
+amp.byso<-get_sample(master.phylo, "k__Fungi;p__Basidiomycota;c__Agaricomycetes;o__Atheliales;f__Atheliaceae;g__Amphinema;s__Amphinema_byssoides")
+amp.byso<-cbind(amp.byso,sample_data(master.phylo))
+View(amp.byso)
+
+sui.gre<-get_sample(master.phylo,
+"k__Fungi;p__Basidiomycota;c__Agaricomycetes;o__Boletales;f__Suillaceae;g__Suillus;s__Suillus_grevillei")
+sui.gre<-cbind(sui.gre,sample_data(master.phylo))
+View(sui.gre)
+
+trig.hir<-get_sample(master.phylo,
+"k__Fungi;p__Ascomycota;c__Geoglossomycetes;o__Geoglossales;f__Geoglossaceae;g__Trichoglossum;s__Trichoglossum_hirsutum")
+trig.hir<-cbind(trig.hir,sample_data(master.phylo))
+View(trig.hir)
+
+cla.ten<-get_sample(master.phylo,
+"k__Fungi;p__Basidiomycota;c__Agaricomycetes;o__Agaricales;f__Clavariaceae;g__Clavaria;s__Clavaria_tenuipes")
+cla.ten<-cbind(cla.ten,sample_data(master.phylo))
+View(cla.ten)
+
+cort.ver<-get_sample(master.phylo,
+"k__Fungi;p__Basidiomycota;c__Agaricomycetes;o__Agaricales;f__Cortinariaceae;g__Cortinarius;s__Cortinarius_vernus")
+cort.ver<-cbind(cort.ver,sample_data(master.phylo))
+View(cort.ver)
+
+pil.bys<-get_sample(master.phylo,
+"k__Fungi;p__Basidiomycota;c__Agaricomycetes;o__Atheliales;f__Atheliaceae;g__Piloderma;s__Piloderma_byssinum")
+pil.bys<-cbind(pil.bys,sample_data(master.phylo))
+View(pil.bys)
+
+wil.miko<-get_sample(master.phylo,
+"k__Fungi;p__Ascomycota;c__Pezizomycetes;o__Pezizales;f__Pyronemataceae;g__Wilcoxina;s__Wilcoxina_mikolae")
+wil.miko<-cbind(wil.miko,sample_data(master.phylo))
+View(wil.miko) ## zero reads only in the mock commuinty... 
+
+wil.reh<-get_sample(master.phylo,
+"k__Fungi;p__Ascomycota;c__Pezizomycetes;o__Pezizales;f__Pyronemataceae;g__Wilcoxina;s__Wilcoxina_rehmii")
+wil.reh<-cbind(wil.reh,sample_data(master.phylo))
+View(wil.reh)
+se.mean.sum.wil.reh<-summarySEwithin(data=wil.reh,measurevar = "wil.reh",withinvars = c("sample_date","Severity"),idvar = "Severity",conf.interval = 0.95)
+View(se.mean.sum.wil.reh)
+
+write_csv(as.data.frame(taxa_names(genus_data)), "genus.data.taxa.names.sept21.2021.csv")
+```
+
+
+## use phyloseq to do shannon and simpson indices
+```{r}
+a.div.measures<-estimate_richness(master.phylo.2.lp, measures = c("Shannon","Simpson")) #get the measures of shannon and simpson 
+plot(a.div.measures$Shannon,a.div.measures$Simpson) # visualize their realtionship to one another
+
+#bind shannon and simpsom to meta data
+meta.data.microplots<-sample_data(master.phylo.2.lp)
+meta.data.microplots
+meta.data.microplots<-cbind(meta.data.microplots,a.div.measures)
+
+#add sequencing depth 
+meta.data.microplots$sample_depth<-sampling.depth[-which(sampling.depth$Severity == "LP-Severe"),]$totalreads
+
+plot(meta.data.microplots$Shannon,meta.data.microplots$sample_depth)
+
+##plot against severity
+ggplot(meta.data.microplots, aes(x = Severity, y = Shannon,color=sample_date,shape=sample_type)) +
+     geom_jitter(position= position_dodge(0.6),size=2,stroke=2)+scale_shape_manual(values=c(1, 2))+
+    labs(x = "Severity", y = "Shannon-Wiener Diversity Index") + 
+    theme_classic()+scale_color_manual(values = c("sienna2","sienna4","mediumaquamarine","blue4"))
+
+#subplot shan -date
+pointshape<-c(rep(16,5),rep(17,5))
+
+ggplot(meta.data.microplots) + #create base plot
+  geom_point(aes(x = Severity, y = Shannon,color=sample_date,shape=sample_type),position=position_dodge(0.6),size=2,stroke=2)+ #add points
+  labs(x = "Severity", y = "Shannon-Wiener Diversity Index (squared)") + #add axis labels
+  scale_color_manual(values = c("sienna2","sienna4","mediumaquamarine","blue4"))+ #manually colour points
+  scale_shape_manual(values = c(1,2))+ #manually provide open point shapes
+  theme_classic()+
+  theme(legend.position = "right",legend.title = element_blank(),axis.text = element_text(size = 13))+ #place axis on the right hand side
+  stat_summary_bin(data= meta.data.microplots ,aes(x = Severity, y = Shannon,color=sample_date,group=sample_date,shape=sample_type),fun.data="mean_se",fun.args = list(mult=1), geom="errorbar",width=0.1, position = position_dodge(0.6),size=0.5)+ #add the se of the mean 
+  stat_summary_bin(data= meta.data.microplots ,aes(x = Severity, y = Shannon,color=sample_date,group=sample_date,shape=sample_type),fun ="mean",geom = "point", position = position_dodge(0.6),size=2,shape=8)+ # add the mean points 
+ stat_summary_bin(data= meta.data.microplots ,aes(x = Severity, y = Shannon,shape=sample_type,group=sample_type,color=sample_date),fun.data="mean_se",fun.args = list(mult=1), geom="linerange",width=0.1, position = position_nudge(0.4),size=0.5)+
+  stat_summary_bin(data= meta.data.microplots ,aes(x = Severity, y = Shannon,shape=sample_type,group=sample_type),shape=pointshape,fun ="mean",geom = "point", position = position_nudge(0.4),size=4)
+
+#subplot shan.sq - layer
+ggplot(meta.data.microplots) +
+  geom_point(aes(x = Severity, y = shan.sq,shape=sample_type,color=sample_date),position=position_dodge(0.6),size=2,stroke=2)+
+  labs(x = "Severity", y = "Shannon-Wiener Diversity Index (squared)") +
+  theme_classic()+
+  scale_color_manual(values = c("sienna2","sienna4","mediumaquamarine","blue4"))+
+  scale_shape_manual(values = c(1,2))+
+  theme(legend.position = "right",legend.title = element_blank(),axis.text = element_text(size = 13))+
+  stat_summary_bin(data= meta.data.microplots ,aes(x = Severity, y = shan.sq,shape=sample_type,group=sample_type,color=sample_date),fun.data="mean_cl_normal",fun.args = list(mult=1), geom="errorbar",width=0.1, position = position_dodge(0.6),size=0.5)+
+  stat_summary_bin(data= meta.data.microplots ,aes(x = Severity, y = shan.sq,shape=sample_type,group=sample_type),shape=pointshape,fun ="mean",geom = "point", position = position_dodge(0.6),size=3)
+
+#subplot shan.sqnon- only sev 
+ggplot(meta.data.microplots) +
+  geom_point(aes(x = Severity, y = shan.sq,shape=sample_type,group=Severity,color=sample_date),position=position_jitter(0.2),size=2,stroke=2)+
+  labs(x = "Severity", y = "Shannon-Wiener Diversity Index (squared)") +
+  theme_classic()+
+  scale_color_manual(values = c("sienna2","sienna4","mediumaquamarine","blue4"))+
+  scale_shape_manual(values = c(1,2))+
+  theme(legend.position = "right",legend.title = element_blank(),axis.text = element_text(size = 13))+
+  stat_summary_bin(data= meta.data.microplots ,aes(x = Severity, y = shan.sq,shape=sample_type,group=Severity,color=sample_date),fun.data="mean_se",fun.args = list(mult=1), geom="errorbar",width=0.1, position = position_dodge(0.6),size=0.5)+
+  stat_summary_bin(data= meta.data.microplots ,aes(x = Severity, y = shan.sq,shape=sample_type,group=Severity,color=sample_date),fun ="mean",geom = "point", position = position_dodge(0.6),size=2,shape=8)
+
+#simpson
+ggplot(meta.data.microplots, aes(x = Severity, y = Simpson, color=sample_date, shape=sample_type))+ geom_jitter(position=position_dodge(0.6), size = 2,stroke=2)+scale_shape_manual(values=c(1, 2)) +
+    labs(x = "Severity", y = "Simpson Diversity Index") + 
+    theme_classic()+scale_color_manual(values = c("sienna2","sienna4","mediumaquamarine","blue4"))
+
+#subplot simp -date
+ggplot(meta.data.microplots) +
+  geom_point(aes(x = Severity, y = simp.quad,color=sample_date,shape=sample_type),position=position_dodge(0.6),size=2,stroke=2)+
+  labs(x = "Severity", y = "Simpson Diversity Index (^4)") +
+  scale_color_manual(values = c("sienna2","sienna4","mediumaquamarine","blue4"))+
+  scale_shape_manual(values = c(1,2))+
+  theme_classic()+
+  theme(legend.position = "right",legend.title = element_blank(),axis.text = element_text(size = 13))+
+  stat_summary_bin(data= meta.data.microplots ,aes(x = Severity, y = simp.quad,color=sample_date,group=sample_date,shape=sample_type),fun.data="mean_cl_normal",fun.args = list(mult=1), geom="errorbar",width=0.1, position = position_dodge(0.6),size=0.5)+
+  stat_summary_bin(data= meta.data.microplots ,aes(x = Severity, y = simp.quad,color=sample_date,group=sample_date,shape=sample_type),fun ="mean",geom = "point", position = position_dodge(0.6),size=2,shape=8)
+
+#subplot simp - layer
+ggplot(meta.data.microplots) +
+  geom_point(aes(x = Severity, y = simp.quad,shape=sample_type,color=sample_date),position=position_dodge(0.6),size=2,stroke=2)+
+  labs(x = "Severity", y = "Simpson Diversity Index (^4)") +
+   scale_color_manual(values = c("sienna2","sienna4","mediumaquamarine","blue4"))+
+  scale_shape_manual(values = c(1,2))+
+  theme_classic()+
+  theme(legend.position = "right",legend.title = element_blank(),axis.text = element_text(size = 13))+
+  stat_summary_bin(data= meta.data.microplots ,aes(x = Severity, y = simp.quad,shape=sample_type,group=sample_type,colour=sample_date),fun.data="mean_se",fun.args = list(mult=1), geom="errorbar",width=0.1, position = position_dodge(0.6),size=0.5)+
+  stat_summary_bin(data= meta.data.microplots ,aes(x = Severity, y = simp.quad,shape=sample_type,group=sample_type),shape=pointshape,fun ="mean",geom = "point", position = position_dodge(0.6),size=3)
+
+pointshape<-c(rep(16,6),rep(17,6))
+
+#subplot- only sev 
+ggplot(meta.data.microplots) +
+  geom_point(aes(x = Severity, y = simp.quad,shape=sample_type,group=Severity,color=sample_date),position=position_jitter(0.2),size=2,stroke=2)+
+  labs(x = "Severity", y = "Simpson Diversity Index (^4)") +
+  scale_color_manual(values = c("sienna2","sienna4","mediumaquamarine","blue4"))+
+  scale_shape_manual(values = c(1,2))+
+  theme_classic()+
+  theme(legend.position = "right",legend.title = element_blank(),axis.text = element_text(size = 13))+
+  stat_summary_bin(data= meta.data.microplots ,aes(x = Severity, y = simp.quad,shape=sample_type,group=Severity,color=sample_date),fun.data="mean_se",fun.args = list(mult=1), geom="errorbar",width=0.2, position = position_dodge(0.6),size=0.5)+
+  stat_summary_bin(data= meta.data.microplots ,aes(x = Severity, y = simp.quad,shape=sample_type,group=Severity,color=sample_date),fun ="mean",geom = "point", position = position_dodge(0.6),size=2,shape=8)
+```
+
+##test asumptions with all sample dates combined 
+```{r}
+
+meta.data.microplots$shan.sqrt<-sqrt(meta.data.microplots$Shannon)
+meta.data.microplots$shan.sq<-meta.data.microplots$Shannon*meta.data.microplots$Shannon
+meta.data.microplots$simp.sq<-meta.data.microplots$Simpson*meta.data.microplots$Simpson
+meta.data.microplots$simp.log<-log(meta.data.microplots$Simpson)
+meta.data.microplots$simp.logit<-logit(meta.data.microplots$Simpson)
+meta.data.microplots$simp.exp<-exp(meta.data.microplots$Simpson)
+meta.data.microplots$simp.quad<-meta.data.microplots$Simpson^4
+
+##try including sample type as factor
+#test heteroscadasity
+leveneTest(Simpson~Severity, data=meta.data.microplots)
+leveneTest(Shannon~Severity, data=meta.data.microplots)
+#^simp sig, shan close but not
+leveneTest(Simpson~sample_date, data=meta.data.microplots)
+leveneTest(Shannon~sample_date, data=meta.data.microplots)
+#^both sig
+leveneTest(Simpson~sample_type, data=meta.data.microplots)
+leveneTest(Shannon~sample_type, data=meta.data.microplots)
+#^simp good and shan not 
+
+
+shan<-lm(shan.sq~Severity*sample_date*sample_type, data=meta.data.microplots)
+simp<-lm(simp.quad~Severity*sample_date*sample_type, data=meta.data.microplots)
+plot(shan)
+plot(simp)
+
+
+#outliers
+outlierTest(shan)
+outlierTest(simp)
+
+
+hist(meta.data.microplots$Simpson) #doesnt look good 
+hist(meta.data.microplots$Shannon)
+
+
+shan<-ggplot(data = meta.data.microplots, aes(sample = shan.sq)) +
+  stat_qq(shape = 1, size = 2) +
+  stat_qq_line()+
+  theme_bw()
+x.pnts.shan <- ggplot_build(shan)$data[[1]]$x
+y.pnts.shan <- ggplot_build(shan)$data[[1]]$y
+offset <- (max(y.pnts.shan) - min(y.pnts.shan)) / 20
+shan +
+    geom_text(label = rownames(meta.data.microplots),
+              x = x.pnts.shan,
+              y = y.pnts.shan + offset)
+#^ not bad
+
+simp<-ggplot(data = meta.data.microplots, aes(sample = simp.quad)) +
+  stat_qq(shape = 1, size = 2) +
+  stat_qq_line()+
+  theme_bw()
+x.pnts.simp <- ggplot_build(simp)$data[[1]]$x
+y.pnts.simp <- ggplot_build(simp)$data[[1]]$y
+offset <- (max(y.pnts.simp) - min(y.pnts.simp)) / 20
+simp +
+    geom_text(label = rownames(meta.data.microplots),
+              x = x.pnts.simp,
+              y = y.pnts.simp + offset)
+
+
+hist(meta.data.microplots$simp.log) 
+hist(meta.data.microplots$shan.sq)
+
+##try including sample type as factor
+#test heteroscadasity
+leveneTest(shan.sq~Severity, data=meta.data.microplots)
+#fine
+leveneTest(shan.sq~sample_date, data=meta.data.microplots)
+# fine
+leveneTest(shan.sq~sample_type, data=meta.data.microplots)
+#should be robust enough to this..
+
+##try including sample type as factor
+#test heteroscadasity
+leveneTest(simp.quad~Severity, data=meta.data.microplots)
+# not fine
+leveneTest(simp.quad~sample_date, data=meta.data.microplots)
+#notfine
+leveneTest(simp.quad~sample_type, data=meta.data.microplots)
+# fine
+
+#Should run Kuskal-Wallis with simmpson
+```
+
+##test alpha div using anova 
+```{r}
+##check relationship between the sequencing depth and the diersity metrics... 
+summary(lm(simp.quad~sample_depth,data = meta.data.microplots))
+summary(lm(shan.sq~sample_depth,data = meta.data.microplots))
+
+#with normalizations
+shan.lm.sq<-lm(shan.sq~Severity*sample_date*sample_type, data=meta.data.microplots)
+simp.lm.quad<-lm(simp.quad~Severity*sample_date*sample_type, data=meta.data.microplots)
+
+#test
+summary(shan.lm)
+summary(simp.quad)
+anova(shan.lm.sq)
+anova(simp.quad)
+plot(shan.lm.sq)
+#not bad
+plot(simp.quad)
+#not bad
+
+
+##post-hoc yukey;s test
+a2.shan<-aov(shan.sq~Severity*sample_date*sample_type, data=meta.data.microplots)
+a2.simp<-aov(simp.quad~Severity*sample_date*sample_type, data=meta.data.microplots)
+tukey.shan.sev<-TukeyHSD(a2.shan, conf.level = 0.95)
+tukey.simp.sev<-TukeyHSD(a2.simp, conf.level = 0.95)
+tukey.shan.sev
+tukey.simp.sev
+```
+
+

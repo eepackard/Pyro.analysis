@@ -1,0 +1,1946 @@
+---
+title: "pyro.mantel.CCA.aug3.2021"
+output: html_notebook
+---
+
+##load packages
+```{r}
+library(readr)
+library(ggplot2)
+library(vegan)
+library(ggvegan)
+library(tidyr)
+library(phyloseq)
+library(plyr)
+library(dplyr)
+library(geosphere)
+library(ggpubr)
+library(ggord)
+library(rgl)
+```
+
+##read in data for fall and spring
+```{r}
+###spring----
+##data output from qiime2 viewer at species level - assigned to order or lower features with 10 or less accross all samples removed
+spring_species_filtered_aug16_2021 <- read_csv("spring.species.aug16.2021.csv")
+samplenames<-spring_species_filtered_aug16_2021$index
+spring_species_filtered_aug16_2021<-spring_species_filtered_aug16_2021[,2:789]
+row.names(spring_species_filtered_aug16_2021)<-samplenames
+View(spring_species_filtered_aug16_2021)
+
+#substract reads that were present in the negative control
+asv.spring_species.filtered_aug16_2021<-as.data.frame(t(spring_species_filtered_aug16_2021))
+which(asv.spring_species.filtered_aug16_2021$neg > 0) ## determine which ASVs the negative has reads in
+
+spring_species_filtered_aug16_2021[,52]<-spring_species_filtered_aug16_2021[,52]-2 #remove the same number of reads from every sample
+spring_species_filtered_aug16_2021[,52]<-ifelse(spring_species_filtered_aug16_2021[,52]<0,0,as.numeric(spring_species_filtered_aug16_2021$`k__Fungi;p__Ascomycota;c__Dothideomycetes;o__Pleosporales;f__Didymellaceae;g__Didymella;s__Didymella_exigua`)) #ensure no ASVs had a negative number of reads
+
+#repeat with other ASV
+spring_species_filtered_aug16_2021[,314]<-spring_species_filtered_aug16_2021[,314]-4
+spring_species_filtered_aug16_2021[,314]<-ifelse(spring_species_filtered_aug16_2021[,314]<0,0,as.numeric(spring_species_filtered_aug16_2021$`k__Fungi;p__Ascomycota;c__Pezizomycetes;o__Pezizales;f__Pyronemataceae;g__Geopyxis;s__Geopyxis_carbonaria`))
+
+spring_species_filtered_aug16_2021<-as.data.frame(spring_species_filtered_aug16_2021) #make df not tibble
+row.names(spring_species_filtered_aug16_2021)<-samplenames #rename the rows
+
+asv.spring_species.filtered_aug16_2021<-as.data.frame(t(spring_species_filtered_aug16_2021))
+which(asv.spring_species.filtered_aug16_2021$neg > 0) ## check that it worked (786-788 are metadata)
+
+##separate out the metadata: sample-type, sample-date, severity
+meta.data.spring<-spring_species_filtered_aug16_2021[,786:788]
+meta.data.microplots.spring<-spring_species_filtered_aug16_2021[c(1:37,46:94),786:788]
+samplenames.microplots<-samplenames[c(1:37,46:94)]
+View(meta.data.microplots.spring)
+
+##read in coordinates in lon/lat
+spring_coordinates_aug3_2021 <- read_csv("spring.coordinates.aug3.2021.csv")
+#bind with metadata
+meta.data.spring<-as.data.frame(cbind(meta.data.spring,spring_coordinates_aug3_2021))
+meta.data.microplots.spring<-meta.data.spring[c(1:37,46:94),]
+
+##reorder severity levels 
+meta.data.microplots.spring$Severity<-ordered(meta.data.microplots.spring$Severity,levels=c("unburnt","surface","medium","med-severe","severe","lp-severe"))
+meta.data.microplots.spring$sample_date<-ordered(meta.data.microplots.spring$sample_date,levels=c("sept","oct","may","june"))
+
+#rename factors 
+meta.data.microplots.spring$Severity <- factor(meta.data.microplots.spring$Severity, labels = c("Unburnt","Low","Medium","Medium-Severe","Severe","LP-Severe"))
+levels(meta.data.microplots.spring$Severity)
+meta.data.microplots.spring$sample_date <- factor(meta.data.microplots.spring$sample_date, labels = c("September","October","May","June"))
+levels(meta.data.microplots.spring$sample_date)
+meta.data.microplots.spring$sample_type<-factor(meta.data.microplots.spring$sample_type,labels = c("Mineral","Surface"))
+levels(meta.data.microplots.spring$sample_type)
+
+
+
+###fall----
+Taxa <- read_csv("Tax-order-100-taxa.csv .csv")
+samplenames.fall<-Taxa$index
+Taxa<-as.data.frame(Taxa[,2:ncol(Taxa)])
+rownames(Taxa)<-samplenames.fall
+Taxa<-Taxa[-42,]
+rownames(Taxa)<-samplenames.fall[-42]
+View(Taxa)
+
+#seperate out the metadata: sample-type, sample-date, severity
+meta.data.fall<-Taxa[,362:363]
+meta.data.fall<-separate(meta.data.fall,col="sample-type",into=c("sample_type","sample_date"),sep="-") #warning for rows 28-30 is just for mock samples 
+meta.data.microplots.fall<-meta.data.fall[c(1:27,31:61),]
+colnames(meta.data.fall)<-c("sample_type","sample_date","Severity")
+colnames(meta.data.microplots.fall)<-c("sample_type","sample_date","Severity")
+View(meta.data.microplots.fall)
+
+##read in lat/lon data 
+fall_coordinates_aug3_2021 <- read_csv("fall.coordinates.aug3.2021.csv")
+fall_coordinates_aug3_2021<-fall_coordinates_aug3_2021[1:61,]
+#bind with metadata
+meta.data.fall<-as.data.frame(cbind(meta.data.fall,fall_coordinates_aug3_2021))
+meta.data.microplots.fall<-meta.data.fall[c(1:27,31:61),]
+
+#order
+meta.data.microplots.fall$Severity<-ordered(meta.data.microplots.fall$Severity,levels=c("unburnt","surface","medium","med-severe","severe"))
+meta.data.microplots.fall$sample_date<-ordered(meta.data.microplots.fall$sample_date,levels=c("sept","oct"))
+
+#rename factors 
+meta.data.microplots.fall$Severity <- factor(meta.data.microplots.fall$Severity, labels = c("Unburnt","Low","Medium","Medium-Severe","Severe"))
+levels(meta.data.microplots.fall$Severity)
+meta.data.microplots.fall$sample_date <- factor(meta.data.microplots.fall$sample_date, labels = c("September","October"))
+levels(meta.data.microplots.fall$sample_date)
+meta.data.microplots.fall$sample_type<-factor(meta.data.microplots.fall$sample_type,labels = c("Mineral","Surface"))
+levels(meta.data.microplots.fall$sample_type)
+
+
+
+```
+
+
+##create phyloseq objects
+```{r}
+##spring ----
+##modify data sheet to fit format - taxa must be rows 
+species.data.otu.spring<-t(spring_species_filtered_aug16_2021[,1:785])
+View(species.data.otu.spring)
+
+##create the species data 
+phylo.species.spring<-otu_table(species.data.otu.spring,taxa_are_rows = TRUE)
+taxa_names(phylo.species.spring)<-colnames(spring_species_filtered_aug16_2021[,1:785])
+sample_names(phylo.species.spring)<-rownames(spring_species_filtered_aug16_2021)
+
+#create taxonomy table in OTU format
+taxa.spring<-as.data.frame(colnames(spring_species_filtered_aug16_2021[,1:785]))
+View(taxa.spring)
+colnames(taxa.spring)<-"full.taxa"
+taxa.spring<-separate(taxa.spring,col= "full.taxa",into = c("Kingdom","Phylum","Class","Order","Family","Genus","Species"),sep = ";")
+
+phylo.taxonomy.spring<-tax_table(taxa.spring)
+phylo.taxonomy.spring
+taxa_names(phylo.taxonomy.spring)<-colnames(spring_species_filtered_aug16_2021[,1:785])
+
+#make sample meta data
+phylo.sample.meta.spring<-sample_data(meta.data.spring)
+sample_names(phylo.sample.meta.spring)<-row.names(spring_species_filtered_aug16_2021)
+
+
+#now merge species, taxonomy, and metadata
+phylo.spring<-phyloseq(phylo.species.spring,phylo.taxonomy.spring,phylo.sample.meta.spring)
+phylo.spring
+
+# redo but without mock, morel, neg samples
+microplot.data.otu.spring<-species.data.otu.spring[1:785,c(1:37,46:94)]
+microplot.taxa.spring<-otu_table(microplot.data.otu.spring,taxa_are_rows = TRUE)
+phylo.sample.meta.spring.microplots<-sample_data(meta.data.microplots.spring)
+sample_names(microplot.taxa.spring)<-samplenames.microplots
+sample_names(phylo.sample.meta.spring.microplots)<-samplenames.microplots
+
+phylo.spring.2<-phyloseq(microplot.taxa.spring,phylo.taxonomy.spring,phylo.sample.meta.spring.microplots)
+
+##hellinger transformed data
+microplot.data.otu.spring.hel<-decostand(microplot.data.otu.spring,method="hellinger")
+microplot.taxa.spring.hel<-otu_table(microplot.data.otu.spring.hel,taxa_are_rows = TRUE)
+sample_names(microplot.taxa.spring.hel)<-samplenames.microplots
+
+phylo.spring.3<-phyloseq(microplot.taxa.spring.hel,phylo.taxonomy.spring,phylo.sample.meta.spring.microplots)
+
+##Fall----
+##modify data sheet to fit format - taxa must be rows 
+species.data.otu.fall<-t(Taxa[,1:361])
+View(species.data.otu.fall)
+
+##create species data
+phylo.taxa.fall<-otu_table(species.data.otu.fall,taxa_are_rows = TRUE)
+phylo.taxa.fall
+
+#create taxonomy table 
+taxa.fall<-as.data.frame(colnames(Taxa[,1:361]))
+View(taxa.fall)
+colnames(taxa.fall)<-"full.taxa"
+taxa.fall<-separate(taxa.fall,col= "full.taxa",into = c("Kingdom","Phylum","Class","Order","Family","Genus","Species"),sep = ";")
+
+phylo.taxonomy.fall<-tax_table(taxa.fall)
+taxa_names(phylo.taxonomy.fall)<-colnames(Taxa[,1:361])
+
+#make sample data
+phylo.sample.meta.fall<-sample_data(meta.data.fall)
+phylo.sample.meta.fall
+sample_names(phylo.sample.meta.fall)<-row.names(Taxa)
+sample_names(phylo.taxa.fall)<-row.names(Taxa)
+
+#now merge
+phylo.fall<-phyloseq(phylo.taxa.fall,phylo.taxonomy.fall,phylo.sample.meta.fall)
+phylo.fall
+
+# redo but without mock samples
+microplot.data.otu.fall<-Taxa[c(1:27,31:61),1:360]
+microplot.data.otu.fall<-t(microplot.data.otu.fall)
+microplot.taxa.fall<-otu_table(microplot.data.otu.fall,taxa_are_rows = TRUE)
+phylo.sample.meta.fall.microplots<-sample_data(meta.data.microplots.fall)
+sample_names(phylo.sample.meta.fall.microplots)<-samplenames.fall[c(-28,-29,-30,-42)]
+sample_names(microplot.taxa.fall)<-samplenames.fall[c(-28,-29,-30,-42)]
+taxa_names(phylo.taxonomy.fall)<-colnames(Taxa[c(1:27,31:61),1:361])
+
+phylo.fall.2<-phyloseq(microplot.taxa.fall,phylo.taxonomy.fall,phylo.sample.meta.fall.microplots)
+
+##hellinger transformed data
+microplot.data.otu.fall.hel<-decostand(microplot.data.otu.fall,method="hellinger")
+microplot.taxa.fall.hel<-otu_table(microplot.data.otu.fall.hel,taxa_are_rows = TRUE)
+sample_names(microplot.taxa.fall.hel)<-samplenames.fall[-c(28,29,30,42)]
+
+phylo.fall.3<-phyloseq(microplot.taxa.fall.hel,phylo.taxonomy.fall,phylo.sample.meta.fall.microplots)
+
+###now merge spring and fall ----
+master.phylo<-merge_phyloseq(phylo.spring.2,phylo.fall.2)
+sample_data(master.phylo)
+master.phylo
+
+###merging the spring and fall transformed data
+master.phylo.2<-merge_phyloseq(phylo.spring.3,phylo.fall.3)
+sample_data(master.phylo.2)
+```
+
+## performing mantel test by month
+```{r}
+##create subset of master phyloseq object by month
+sept.phylo.2<-subset_samples(master.phylo, sample_date =="September")
+oct.phylo.2<-subset_samples(master.phylo, sample_date=="October")
+may.phylo.2<-subset_samples(master.phylo, sample_date=="May")
+june.phylo.2<-subset_samples(master.phylo, sample_date=="June")
+
+#create function to create vegan friendly community ASV matrix (https://jacobrprice.github.io/2017/08/26/phyloseq-to-vegan-and-back.html)
+psotu2veg <- function(phyloseq) {
+  OTU <- otu_table(phyloseq)
+  if (taxa_are_rows(OTU)) {
+    OTU <- t(OTU)
+  }
+  return(as(OTU, "matrix"))
+}
+
+##create bray-curtis dissimilarity  matrix from phyloseq otu object using vegan
+abundance.dist.sept<-vegdist(psotu2veg(sept.phylo.2), method= "bray")
+abundance.dist.oct<-vegdist(psotu2veg(oct.phylo.2), method= "bray")
+abundance.dist.may<-vegdist(psotu2veg(may.phylo.2), method= "bray")
+abundance.dist.june<-vegdist(psotu2veg(june.phylo.2), method= "bray")
+
+#create dataframes of the sample data
+sd.sept<-sample_data(sept.phylo.2)
+sd.oct<-sample_data(oct.phylo.2)
+sd.may<-sample_data(may.phylo.2)
+sd.june<-sample_data(june.phylo.2)
+sd.june.m<-subset_samples(sd.june, sample_type == "mineral")
+sd.june.s<-subset_samples(sd.june, sample_type == "organic")
+
+
+
+#create dataframes of just the lat/lon data 
+geo.dist.sept<-cbind(sd.sept$lon,sd.sept$lat)
+geo.dist.oct<-cbind(sd.oct$lon,sd.oct$lat)
+geo.dist.may<-cbind(sd.may$lon,sd.may$lat)
+geo.dist.june<-cbind(sd.june$lon,sd.june$lat)
+geo.dist.june.m<-cbind(sd.june.m$lon,sd.june.m$lat)
+geo.dist.june.s<-cbind(sd.june.s$lon,sd.june.s$lat)
+
+#create distance matrices
+d.geo.sept<-distm(geo.dist.sept,fun = distHaversine)
+d.geo.oct<-distm(geo.dist.oct,fun = distHaversine)
+d.geo.may<-distm(geo.dist.may,fun = distHaversine)
+d.geo.june<-distm(geo.dist.june,fun = distHaversine)
+d.geo.june.m<-distm(geo.dist.june.m,fun = distHaversine)
+d.geo.june.s<-distm(geo.dist.june.s,fun = distHaversine)
+
+dist.geo.sept<-as.dist(d.geo.sept)
+dist.geo.oct<-as.dist(d.geo.oct)
+dist.geo.may<-as.dist(d.geo.may)
+dist.geo.june<-as.dist(d.geo.june)
+dist.geo.june.m<-as.dist(d.geo.june.m)
+dist.geo.june.s<-as.dist(d.geo.june.s)
+
+##perform mantel tests 
+set.seed(14)
+abund.geo.sept<-mantel(abundance.dist.sept,dist.geo.sept,method = "pearson", permutations = 9999, na.rm = TRUE)
+abund.geo.sept
+abund.geo.oct<-mantel(abundance.dist.oct,dist.geo.oct,method = "pearson", permutations = 9999, na.rm = TRUE)
+abund.geo.oct
+abund.geo.may<-mantel(abundance.dist.may,dist.geo.may,method = "pearson", permutations = 9999, na.rm = TRUE)
+abund.geo.may
+abund.geo.june<-mantel(abundance.dist.june,dist.geo.june,method = "pearson", permutations = 9999, na.rm = TRUE)
+abund.geo.june
+
+##all show significance but less so for May and Oct
+
+## lets try to visualize https://jkzorz.github.io/2019/07/09/scatter-plots.html
+aa <-as.vector(abundance.dist.sept)
+gg<-as.vector(dist.geo.sept)
+bb<-as.vector(abundance.dist.oct)
+hh<-as.vector(dist.geo.oct)
+cc <-as.vector(abundance.dist.may)
+ii<-as.vector(dist.geo.may)
+dd<-as.vector(abundance.dist.june)
+jj<-as.vector(dist.geo.june)
+
+ag<-data.frame(aa,gg)
+bh<-data.frame(bb,hh)
+ci<-data.frame(cc,ii)
+dj<-data.frame(dd,jj)
+
+
+sept.mantel = ggplot(ag, aes(y = aa, x = gg)) + 
+    geom_point(size = 3, alpha = 0.5) + 
+    labs(x = "Physical distance", y = "Bray-Curtis Dissimilarity") + 
+    theme( axis.text.x = element_text(face = "bold",colour = "black", size = 12), 
+        axis.text.y = element_text(face = "bold", size = 11, colour = "black"), 
+        axis.title= element_text(face = "bold", size = 14, colour = "black"), 
+        panel.background = element_blank(), 
+        panel.border = element_rect(fill = NA, colour = "black"))
+sept.mantel
+
+oct.mantel = ggplot(bh, aes(y = bb, x = hh)) + 
+    geom_point(size = 3, alpha = 0.5) + 
+    labs(x = "Physical distance", y = "Bray-Curtis Dissimilarity") + 
+    theme( axis.text.x = element_text(face = "bold",colour = "black", size = 12), 
+        axis.text.y = element_text(face = "bold", size = 11, colour = "black"), 
+        axis.title= element_text(face = "bold", size = 14, colour = "black"), 
+        panel.background = element_blank(), 
+        panel.border = element_rect(fill = NA, colour = "black"))
+
+oct.mantel
+
+may.mantel = ggplot(ci, aes(y = cc, x = ii)) + 
+    geom_point(size = 3, alpha = 0.5) + 
+    labs(x = "Physical distance", y = "Bray-Curtis Dissimilarity") + 
+    theme( axis.text.x = element_text(face = "bold",colour = "black", size = 12), 
+        axis.text.y = element_text(face = "bold", size = 11, colour = "black"), 
+        axis.title= element_text(face = "bold", size = 14, colour = "black"), 
+        panel.background = element_blank(), 
+        panel.border = element_rect(fill = NA, colour = "black"))
+
+may.mantel
+
+june.mantel = ggplot(dj, aes(y = dd, x = jj)) + 
+    geom_point(size = 3, alpha = 0.5) + 
+    labs(x = "Physical distance", y = "Bray-Curtis Dissimilarity") + 
+    theme( axis.text.x = element_text(face = "bold",colour = "black", size = 12), 
+        axis.text.y = element_text(face = "bold", size = 11, colour = "black"), 
+        axis.title= element_text(face = "bold", size = 14, colour = "black"), 
+        panel.background = element_blank(), 
+        panel.border = element_rect(fill = NA, colour = "black"))
+
+june.mantel
+
+ggarrange(sept.mantel,oct.mantel,may.mantel,june.mantel,font.label = c(size="5",face="plain"))
+
+##without LP but with microplot 16 
+may.phylo.2.noLP<-subset_samples(may.phylo.2, Severity != "LP-Severe")
+june.phylo.2.noLP<-subset_samples(june.phylo.2, Severity != "LP-Severe")
+
+##repeat code from above adding .16.lp to the end of names to differentiate 
+##create bray-curtis dissimilarity  matrix from phyloseq otu object using vegan
+abundance.dist.may.lp<-vegdist(psotu2veg(may.phylo.2.noLP), method= "bray")
+abundance.dist.june.lp<-vegdist(psotu2veg(june.phylo.2.noLP), method= "bray")
+
+#create dataframes of the sample data
+sd.may.lp<-sample_data(may.phylo.2.noLP)
+sd.june.lp<-sample_data(june.phylo.2.noLP)
+
+
+#create dataframes of just the lat/lon data 
+geo.dist.may.lp<-cbind(sd.may.lp$lon,sd.may.lp$lat)
+geo.dist.june.lp<-cbind(sd.june.lp$lon,sd.june.lp$lat)
+
+
+#create distance matrices
+d.geo.may.lp<-distm(geo.dist.may.lp,fun = distHaversine)
+d.geo.june.lp<-distm(geo.dist.june.lp,fun = distHaversine)
+
+dist.geo.may.lp<-as.dist(d.geo.may.lp)
+dist.geo.june.lp<-as.dist(d.geo.june.lp)
+
+##perform mantel tests 
+set.seed(14)
+abund.geo.sept<-mantel(abundance.dist.sept,dist.geo.sept,method = "pearson", permutations = 9999, na.rm = TRUE)
+abund.geo.sept
+abund.geo.oct<-mantel(abundance.dist.oct,dist.geo.oct,method = "pearson", permutations = 9999, na.rm = TRUE)
+abund.geo.oct
+abund.geo.may<-mantel(abundance.dist.may.lp,dist.geo.may.lp,method = "pearson", permutations = 9999, na.rm = TRUE)
+abund.geo.may #Mantel statistic r: 0.157 Significance: 0.0098 
+abund.geo.june<-mantel(abundance.dist.june.lp,dist.geo.june.lp,method = "pearson", permutations = 9999, na.rm = TRUE)
+abund.geo.june #Mantel statistic r: 0.2239 Significance: 4e-04 
+
+##all show significance 
+
+## lets try to visualize https://jkzorz.github.io/2019/07/09/scatter-plots.html
+aa <-as.vector(abundance.dist.sept)
+gg<-as.vector(dist.geo.sept)
+bb<-as.vector(abundance.dist.oct)
+hh<-as.vector(dist.geo.oct)
+cc <-as.vector(abundance.dist.may.lp)
+ii<-as.vector(dist.geo.may.lp)
+dd<-as.vector(abundance.dist.june.lp)
+jj<-as.vector(dist.geo.june.lp)
+
+ag<-data.frame(aa,gg)
+bh<-data.frame(bb,hh)
+ci<-data.frame(cc,ii)
+dj<-data.frame(dd,jj)
+
+
+sept.mantel = ggplot(ag, aes(y = aa, x = gg)) + 
+    geom_point(size = 3, alpha = 0.5) + 
+    labs(x = "Physical distance", y = "Bray-Curtis Dissimilarity") + 
+    theme( axis.text.x = element_text(face = "bold",colour = "black", size = 12), 
+        axis.text.y = element_text(face = "bold", size = 11, colour = "black"), 
+        axis.title= element_text(face = "bold", size = 14, colour = "black"), 
+        panel.background = element_blank(), 
+        panel.border = element_rect(fill = NA, colour = "black"))
+sept.mantel
+
+oct.mantel = ggplot(bh, aes(y = bb, x = hh)) + 
+    geom_point(size = 3, alpha = 0.5) + 
+    labs(x = "Physical distance", y = "Bray-Curtis Dissimilarity") + 
+    theme( axis.text.x = element_text(face = "bold",colour = "black", size = 12), 
+        axis.text.y = element_text(face = "bold", size = 11, colour = "black"), 
+        axis.title= element_text(face = "bold", size = 14, colour = "black"), 
+        panel.background = element_blank(), 
+        panel.border = element_rect(fill = NA, colour = "black"))
+
+oct.mantel
+
+may.mantel = ggplot(ci, aes(y = cc, x = ii)) + 
+    geom_point(size = 3, alpha = 0.5) + 
+    labs(x = "Physical distance", y = "Bray-Curtis Dissimilarity") + 
+    theme( axis.text.x = element_text(face = "bold",colour = "black", size = 12), 
+        axis.text.y = element_text(face = "bold", size = 11, colour = "black"), 
+        axis.title= element_text(face = "bold", size = 14, colour = "black"), 
+        panel.background = element_blank(), 
+        panel.border = element_rect(fill = NA, colour = "black"))
+
+may.mantel
+
+june.mantel = ggplot(dj, aes(y = dd, x = jj)) + 
+    geom_point(size = 3, alpha = 0.5) + 
+    labs(x = "Physical distance", y = "Bray-Curtis Dissimilarity") + 
+    theme( axis.text.x = element_text(face = "bold",colour = "black", size = 12), 
+        axis.text.y = element_text(face = "bold", size = 11, colour = "black"), 
+        axis.title= element_text(face = "bold", size = 14, colour = "black"), 
+        panel.background = element_blank(), 
+        panel.border = element_rect(fill = NA, colour = "black"))
+
+june.mantel
+
+ggarrange(sept.mantel,oct.mantel,may.mantel,june.mantel,font.label = c(size="5",face="plain"))
+```
+
+##repeat mantel tests but without microplot 16 
+```{r}
+#must run in order - should result in 30 samples for sept/oct and 38 for may/june
+sept.phylo.2.no16<-subset_samples(sept.phylo.2, sample_names(sept.phylo.2) != "M16A")
+sept.phylo.2.no16<-subset_samples(sept.phylo.2.no16, sample_names(sept.phylo.2.no16) != "O16A")
+
+oct.phylo.2.no16<-subset_samples(oct.phylo.2, sample_names(oct.phylo.2) != "M16C")
+oct.phylo.2.no16<-subset_samples(oct.phylo.2.no16, sample_names(oct.phylo.2.no16) != "O16C")
+
+may.phylo.2.no16<-subset_samples(may.phylo.2, sample_names(may.phylo.2) != "M16E")
+may.phylo.2.no16<-subset_samples(may.phylo.2.no16, sample_names(may.phylo.2.no16) != "O16E")
+
+june.phylo.2.no16<-subset_samples(june.phylo.2, sample_names(june.phylo.2) != "M16G")
+june.phylo.2.no16<-subset_samples(june.phylo.2.no16, sample_names(june.phylo.2.no16) != "O16G")
+
+
+##repeat code from above adding .16 to the end of names to differentiate 
+##create bray-curtis dissimilarity  matrix from phyloseq otu object using vegan
+abundance.dist.sept.16<-vegdist(psotu2veg(sept.phylo.2.no16), method= "bray")
+abundance.dist.oct.16<-vegdist(psotu2veg(oct.phylo.2.no16), method= "bray")
+abundance.dist.may.16<-vegdist(psotu2veg(may.phylo.2.no16), method= "bray")
+abundance.dist.june.16<-vegdist(psotu2veg(june.phylo.2.no16), method= "bray")
+
+#create dataframes of the sample data
+sd.sept.16<-sample_data(sept.phylo.2.no16)
+sd.oct.16<-sample_data(oct.phylo.2.no16)
+sd.may.16<-sample_data(may.phylo.2.no16)
+sd.june.16<-sample_data(june.phylo.2.no16)
+
+
+#create dataframes of just the lat/lon data 
+geo.dist.sept.16<-cbind(sd.sept.16$lon,sd.sept.16$lat)
+geo.dist.oct.16<-cbind(sd.oct.16$lon,sd.oct.16$lat)
+geo.dist.may.16<-cbind(sd.may.16$lon,sd.may.16$lat)
+geo.dist.june.16<-cbind(sd.june.16$lon,sd.june.16$lat)
+
+
+#create distance matrices
+d.geo.sept.16<-distm(geo.dist.sept.16,fun = distHaversine)
+d.geo.oct.16<-distm(geo.dist.oct.16,fun = distHaversine)
+d.geo.may.16<-distm(geo.dist.may.16,fun = distHaversine)
+d.geo.june.16<-distm(geo.dist.june.16,fun = distHaversine)
+
+dist.geo.sept.16<-as.dist(d.geo.sept.16)
+dist.geo.oct.16<-as.dist(d.geo.oct.16)
+dist.geo.may.16<-as.dist(d.geo.may.16)
+dist.geo.june.16<-as.dist(d.geo.june.16)
+
+
+##perform mantel tests 
+set.seed(14)
+abund.geo.sept.16<-mantel(abundance.dist.sept.16,dist.geo.sept.16,method = "pearson", permutations = 9999, na.rm = TRUE)
+abund.geo.sept.16
+abund.geo.oct.16<-mantel(abundance.dist.oct.16,dist.geo.oct.16,method = "pearson", permutations = 9999, na.rm = TRUE)
+abund.geo.oct.16
+abund.geo.may.16<-mantel(abundance.dist.may.16,dist.geo.may.16,method = "pearson", permutations = 9999, na.rm = TRUE)
+abund.geo.may.16
+abund.geo.june.16<-mantel(abundance.dist.june.16,dist.geo.june.16,method = "pearson", permutations = 9999, na.rm = TRUE)
+abund.geo.june.16
+
+##
+
+## lets try to visualize https://jkzorz.github.io/2019/07/09/scatter-plots.html
+##variables are not renamed for this analysis so they must be rerun for each visualization 
+aa <-as.vector(abundance.dist.sept.16)
+gg<-as.vector(dist.geo.sept.16)
+bb<-as.vector(abundance.dist.oct.16)
+hh<-as.vector(dist.geo.oct.16)
+cc <-as.vector(abundance.dist.may.16)
+ii<-as.vector(dist.geo.may.16)
+dd<-as.vector(abundance.dist.june.16)
+jj<-as.vector(dist.geo.june.16)
+
+ag<-data.frame(aa,gg)
+bh<-data.frame(bb,hh)
+ci<-data.frame(cc,ii)
+dj<-data.frame(dd,jj)
+
+
+sept.mantel.16 = ggplot(ag, aes(y = aa, x = gg)) + 
+    geom_point(size = 3, alpha = 0.5) + 
+    labs(x = "Physical distance", y = "Bray-Curtis Dissimilarity") + 
+    theme( axis.text.x = element_text(face = "bold",colour = "black", size = 12), 
+        axis.text.y = element_text(face = "bold", size = 11, colour = "black"), 
+        axis.title= element_text(face = "bold", size = 14, colour = "black"), 
+        panel.background = element_blank(), 
+        panel.border = element_rect(fill = NA, colour = "black"))
+sept.mantel.16
+
+oct.mantel.16 = ggplot(bh, aes(y = bb, x = hh)) + 
+    geom_point(size = 3, alpha = 0.5) + 
+    labs(x = "Physical distance", y = "Bray-Curtis Dissimilarity") + 
+    theme( axis.text.x = element_text(face = "bold",colour = "black", size = 12), 
+        axis.text.y = element_text(face = "bold", size = 11, colour = "black"), 
+        axis.title= element_text(face = "bold", size = 14, colour = "black"), 
+        panel.background = element_blank(), 
+        panel.border = element_rect(fill = NA, colour = "black"))
+
+oct.mantel.16
+
+may.mantel.16 = ggplot(ci, aes(y = cc, x = ii)) + 
+    geom_point(size = 3, alpha = 0.5) + 
+    labs(x = "Physical distance", y = "Bray-Curtis Dissimilarity") + 
+    theme( axis.text.x = element_text(face = "bold",colour = "black", size = 12), 
+        axis.text.y = element_text(face = "bold", size = 11, colour = "black"), 
+        axis.title= element_text(face = "bold", size = 14, colour = "black"), 
+        panel.background = element_blank(), 
+        panel.border = element_rect(fill = NA, colour = "black"))
+
+may.mantel.16
+
+june.mantel.16 = ggplot(dj, aes(y = dd, x = jj)) + 
+    geom_point(size = 3, alpha = 0.5) + 
+    labs(x = "Physical distance", y = "Bray-Curtis Dissimilarity") + 
+    theme( axis.text.x = element_text(face = "bold",colour = "black", size = 12), 
+        axis.text.y = element_text(face = "bold", size = 11, colour = "black"), 
+        axis.title= element_text(face = "bold", size = 14, colour = "black"), 
+        panel.background = element_blank(), 
+        panel.border = element_rect(fill = NA, colour = "black"))
+
+june.mantel.16
+
+ggarrange(sept.mantel.16,oct.mantel.16,may.mantel.16,june.mantel.16,font.label = c(size="5",face="plain"))
+
+##generate may and june mantel tests without LP-severe - should now also be 30 samples (using data with microplot 16)
+may.phylo.2.no16.noLP<-subset_samples(may.phylo.2.no16, Severity != "LP-Severe")
+june.phylo.2.no16.noLP<-subset_samples(june.phylo.2.no16, Severity != "LP-Severe")
+
+##repeat code from above adding .16.lp to the end of names to differentiate 
+##create bray-curtis dissimilarity  matrix from phyloseq otu object using vegan
+abundance.dist.may.16.lp<-vegdist(psotu2veg(may.phylo.2.no16.noLP), method= "bray")
+abundance.dist.june.16.lp<-vegdist(psotu2veg(june.phylo.2.no16.noLP), method= "bray")
+
+#create dataframes of the sample data
+sd.may.16.lp<-sample_data(may.phylo.2.no16.noLP)
+sd.june.16.lp<-sample_data(june.phylo.2.no16.noLP)
+
+
+#create dataframes of just the lat/lon data 
+geo.dist.may.16.lp<-cbind(sd.may.16.lp$lon,sd.may.16.lp$lat)
+geo.dist.june.16.lp<-cbind(sd.june.16.lp$lon,sd.june.16.lp$lat)
+
+
+#create distance matrices
+d.geo.may.16.lp<-distm(geo.dist.may.16.lp,fun = distHaversine)
+d.geo.june.16.lp<-distm(geo.dist.june.16.lp,fun = distHaversine)
+
+dist.geo.may.16.lp<-as.dist(d.geo.may.16.lp)
+dist.geo.june.16.lp<-as.dist(d.geo.june.16.lp)
+
+
+##perform mantel tests 
+set.seed(14)
+abund.geo.may.16.lp<-mantel(abundance.dist.may.16.lp,dist.geo.may.16.lp,method = "pearson", permutations = 9999, na.rm = TRUE)
+abund.geo.may.16.lp
+abund.geo.june.16.lp<-mantel(abundance.dist.june.16.lp,dist.geo.june.16.lp,method = "pearson", permutations = 9999, na.rm = TRUE)
+abund.geo.june.16.lp
+
+##
+
+## lets try to visualize https://jkzorz.github.io/2019/07/09/scatter-plots.html
+##variables are not renamed for this analysis so they must be rerun for each visualization 
+aa <-as.vector(abundance.dist.sept.16)
+gg<-as.vector(dist.geo.sept.16)
+bb<-as.vector(abundance.dist.oct.16)
+hh<-as.vector(dist.geo.oct.16)
+cc <-as.vector(abundance.dist.may.16.lp)
+ii<-as.vector(dist.geo.may.16.lp)
+dd<-as.vector(abundance.dist.june.16.lp)
+jj<-as.vector(dist.geo.june.16.lp)
+
+ag<-data.frame(aa,gg)
+bh<-data.frame(bb,hh)
+ci<-data.frame(cc,ii)
+dj<-data.frame(dd,jj)
+
+
+sept.mantel.16 = ggplot(ag, aes(y = aa, x = gg)) + 
+    geom_point(size = 3, alpha = 0.5) + 
+    labs(x = "Physical distance", y = "Bray-Curtis Dissimilarity") + 
+    theme( axis.text.x = element_text(face = "bold",colour = "black", size = 12), 
+        axis.text.y = element_text(face = "bold", size = 11, colour = "black"), 
+        axis.title= element_text(face = "bold", size = 14, colour = "black"), 
+        panel.background = element_blank(), 
+        panel.border = element_rect(fill = NA, colour = "black"))
+sept.mantel.16
+
+oct.mantel.16 = ggplot(bh, aes(y = bb, x = hh)) + 
+    geom_point(size = 3, alpha = 0.5) + 
+    labs(x = "Physical distance", y = "Bray-Curtis Dissimilarity") + 
+    theme( axis.text.x = element_text(face = "bold",colour = "black", size = 12), 
+        axis.text.y = element_text(face = "bold", size = 11, colour = "black"), 
+        axis.title= element_text(face = "bold", size = 14, colour = "black"), 
+        panel.background = element_blank(), 
+        panel.border = element_rect(fill = NA, colour = "black"))
+
+oct.mantel.16
+
+may.mantel.16.lp = ggplot(ci, aes(y = cc, x = ii)) + 
+    geom_point(size = 3, alpha = 0.5) + 
+    labs(x = "Physical distance", y = "Bray-Curtis Dissimilarity") + 
+    theme( axis.text.x = element_text(face = "bold",colour = "black", size = 12), 
+        axis.text.y = element_text(face = "bold", size = 11, colour = "black"), 
+        axis.title= element_text(face = "bold", size = 14, colour = "black"), 
+        panel.background = element_blank(), 
+        panel.border = element_rect(fill = NA, colour = "black"))
+
+may.mantel.16.lp
+
+june.mantel.16.lp = ggplot(dj, aes(y = dd, x = jj)) + 
+    geom_point(size = 3, alpha = 0.5) + 
+    labs(x = "Physical distance", y = "Bray-Curtis Dissimilarity") + 
+    theme( axis.text.x = element_text(face = "bold",colour = "black", size = 12), 
+        axis.text.y = element_text(face = "bold", size = 11, colour = "black"), 
+        axis.title= element_text(face = "bold", size = 14, colour = "black"), 
+        panel.background = element_blank(), 
+        panel.border = element_rect(fill = NA, colour = "black"))
+
+june.mantel.16.lp
+
+ggarrange(sept.mantel.16,oct.mantel.16,may.mantel.16.lp,june.mantel.16.lp,font.label = c(size="5",face="plain"))
+
+```
+
+
+##perform mantel test with hellinger transform data - remove LP-Severe for may and june
+```{r}
+##test first with microplot 16 
+##create subset of master phyloseq object by month adding .hel for hellinger data 
+sept.phylo.hel<-subset_samples(master.phylo.2, sample_date =="September")
+oct.phylo.hel<-subset_samples(master.phylo.2, sample_date=="October")
+may.phylo.hel<-subset_samples(master.phylo.2, sample_date=="May")
+june.phylo.hel<-subset_samples(master.phylo.2, sample_date=="June")
+
+#remove LP-SEvere from may and june - should now also be 32 samples (using data with microplot 16)
+may.phylo.hel.noLP<-subset_samples(may.phylo.hel, Severity != "LP-Severe")
+june.phylo.hel.noLP<-subset_samples(june.phylo.hel, Severity != "LP-Severe")
+
+##create bray-curtis dissimilarity  matrix from phyloseq otu object using vegan
+abundance.dist.sept.hel<-vegdist(psotu2veg(sept.phylo.hel), method= "bray")
+abundance.dist.oct.hel<-vegdist(psotu2veg(oct.phylo.hel), method= "bray")
+abundance.dist.may.hel<-vegdist(psotu2veg(may.phylo.hel.noLP), method= "bray")
+abundance.dist.june.hel<-vegdist(psotu2veg(june.phylo.hel.noLP), method= "bray")
+
+#create dataframes of the sample data
+sd.sept.hel<-sample_data(sept.phylo.hel)
+sd.oct.hel<-sample_data(oct.phylo.hel)
+sd.may.hel<-sample_data(may.phylo.hel.noLP)
+sd.june.hel<-sample_data(june.phylo.hel.noLP)
+
+#create dataframes of just the lat/lon data 
+geo.dist.sept.hel<-cbind(sd.sept.hel$lon,sd.sept.hel$lat)
+geo.dist.oct.hel<-cbind(sd.oct.hel$lon,sd.oct.hel$lat)
+geo.dist.may.hel<-cbind(sd.may.hel$lon,sd.may.hel$lat)
+geo.dist.june.hel<-cbind(sd.june.hel$lon,sd.june.hel$lat)
+
+
+#create distance matrices
+d.geo.sept.hel<-distm(geo.dist.sept.hel,fun = distHaversine)
+d.geo.oct.hel<-distm(geo.dist.oct.hel,fun = distHaversine)
+d.geo.may.hel<-distm(geo.dist.may.hel,fun = distHaversine)
+d.geo.june.hel<-distm(geo.dist.june.hel,fun = distHaversine)
+
+dist.geo.sept.hel<-as.dist(d.geo.sept.hel)
+dist.geo.oct.hel<-as.dist(d.geo.oct.hel)
+dist.geo.may.hel<-as.dist(d.geo.may.hel)
+dist.geo.june.hel<-as.dist(d.geo.june.hel)
+
+
+##perform mantel tests 
+set.seed(14)
+abund.geo.sept.hel<-mantel(abundance.dist.sept.hel,dist.geo.sept.hel,method = "pearson", permutations = 9999, na.rm = TRUE)
+abund.geo.sept.hel
+abund.geo.oct.hel<-mantel(abundance.dist.oct.hel,dist.geo.oct.hel,method = "pearson", permutations = 9999, na.rm = TRUE)
+abund.geo.oct.hel
+abund.geo.may.hel<-mantel(abundance.dist.may.hel,dist.geo.may.hel,method = "pearson", permutations = 9999, na.rm = TRUE)
+abund.geo.may.hel
+abund.geo.june.hel<-mantel(abundance.dist.june.hel,dist.geo.june.hel,method = "pearson", permutations = 9999, na.rm = TRUE)
+abund.geo.june.hel
+
+###super significant with microplot 16 in there..... 
+
+## lets try to visualize https://jkzorz.github.io/2019/07/09/scatter-plots.html
+aa <-as.vector(abundance.dist.sept.hel)
+gg<-as.vector(dist.geo.sept.hel)
+bb<-as.vector(abundance.dist.oct.hel)
+hh<-as.vector(dist.geo.oct.hel)
+cc <-as.vector(abundance.dist.may.hel)
+ii<-as.vector(dist.geo.may.hel)
+dd<-as.vector(abundance.dist.june.hel)
+jj<-as.vector(dist.geo.june.hel)
+
+ag<-data.frame(aa,gg)
+bh<-data.frame(bb,hh)
+ci<-data.frame(cc,ii)
+dj<-data.frame(dd,jj)
+
+
+sept.mantel.hel = ggplot(ag, aes(y = aa, x = gg)) + 
+    geom_point(size = 3, alpha = 0.5) + 
+    labs(x = "Physical distance", y = "Bray-Curtis Dissimilarity") + 
+    theme( axis.text.x = element_text(face = "bold",colour = "black", size = 12), 
+        axis.text.y = element_text(face = "bold", size = 11, colour = "black"), 
+        axis.title= element_text(face = "bold", size = 14, colour = "black"), 
+        panel.background = element_blank(), 
+        panel.border = element_rect(fill = NA, colour = "black"))
+sept.mantel.hel
+
+oct.mantel.hel = ggplot(bh, aes(y = bb, x = hh)) + 
+    geom_point(size = 3, alpha = 0.5) + 
+    labs(x = "Physical distance", y = "Bray-Curtis Dissimilarity") + 
+    theme( axis.text.x = element_text(face = "bold",colour = "black", size = 12), 
+        axis.text.y = element_text(face = "bold", size = 11, colour = "black"), 
+        axis.title= element_text(face = "bold", size = 14, colour = "black"), 
+        panel.background = element_blank(), 
+        panel.border = element_rect(fill = NA, colour = "black"))
+
+oct.mantel.hel
+
+may.mantel.hel = ggplot(ci, aes(y = cc, x = ii)) + 
+    geom_point(size = 3, alpha = 0.5) + 
+    labs(x = "Physical distance", y = "Bray-Curtis Dissimilarity") + 
+    theme( axis.text.x = element_text(face = "bold",colour = "black", size = 12), 
+        axis.text.y = element_text(face = "bold", size = 11, colour = "black"), 
+        axis.title= element_text(face = "bold", size = 14, colour = "black"), 
+        panel.background = element_blank(), 
+        panel.border = element_rect(fill = NA, colour = "black"))
+
+may.mantel.hel
+
+june.mantel.hel = ggplot(dj, aes(y = dd, x = jj)) + 
+    geom_point(size = 3, alpha = 0.5) + 
+    labs(x = "Physical distance", y = "Bray-Curtis Dissimilarity") + 
+    theme( axis.text.x = element_text(face = "bold",colour = "black", size = 12), 
+        axis.text.y = element_text(face = "bold", size = 11, colour = "black"), 
+        axis.title= element_text(face = "bold", size = 14, colour = "black"), 
+        panel.background = element_blank(), 
+        panel.border = element_rect(fill = NA, colour = "black"))
+
+june.mantel.hel
+
+ggarrange(sept.mantel.hel,oct.mantel.hel,may.mantel.hel,june.mantel.hel,font.label = c(size="5",face="plain"))
+
+
+## now repeat without microplot 16 -----
+sept.phylo.hel.no16<-subset_samples(sept.phylo.hel, sample_names(sept.phylo.hel) != "M16A")
+sept.phylo.hel.no16<-subset_samples(sept.phylo.hel.no16, sample_names(sept.phylo.hel.no16) != "O16A")
+
+oct.phylo.hel.no16<-subset_samples(oct.phylo.hel, sample_names(oct.phylo.hel) != "M16C")
+oct.phylo.hel.no16<-subset_samples(oct.phylo.hel.no16, sample_names(oct.phylo.hel.no16) != "O16C")
+
+may.phylo.hel.no16<-subset_samples(may.phylo.hel.noLP, sample_names(may.phylo.hel.noLP) != "M16E")## still keep LP-Severe removed
+may.phylo.hel.no16<-subset_samples(may.phylo.hel.no16, sample_names(may.phylo.hel.no16) != "O16E")
+
+june.phylo.hel.no16<-subset_samples(june.phylo.hel.noLP, sample_names(june.phylo.hel.noLP) != "M16G")## still keep LP-Severe removed
+june.phylo.hel.no16<-subset_samples(june.phylo.hel.no16, sample_names(june.phylo.hel.no16) != "O16G")
+
+##repeat code from above adding .16.hel to the end of names to differentiate 
+##create bray-curtis dissimilarity  matrix from phyloseq otu object using vegan
+abundance.dist.sept.16.hel<-vegdist(psotu2veg(sept.phylo.hel.no16), method= "bray")
+abundance.dist.oct.16.hel<-vegdist(psotu2veg(oct.phylo.hel.no16), method= "bray")
+abundance.dist.may.16.hel<-vegdist(psotu2veg(may.phylo.hel.no16), method= "bray")
+abundance.dist.june.16.hel<-vegdist(psotu2veg(june.phylo.hel.no16), method= "bray")
+
+#create dataframes of the sample data
+sd.sept.16.hel<-sample_data(sept.phylo.hel.no16)
+sd.oct.16.hel<-sample_data(oct.phylo.hel.no16)
+sd.may.16.hel<-sample_data(may.phylo.hel.no16)
+sd.june.16.hel<-sample_data(june.phylo.hel.no16)
+
+
+#create dataframes of just the lat/lon data 
+geo.dist.sept.16.hel<-cbind(sd.sept.16.hel$lon,sd.sept.16.hel$lat)
+geo.dist.oct.16.hel<-cbind(sd.oct.16.hel$lon,sd.oct.16.hel$lat)
+geo.dist.may.16.hel<-cbind(sd.may.16.hel$lon,sd.may.16.hel$lat)
+geo.dist.june.16.hel<-cbind(sd.june.16.hel$lon,sd.june.16.hel$lat)
+
+
+#create distance matrices
+d.geo.sept.16.hel<-distm(geo.dist.sept.16.hel,fun = distHaversine)
+d.geo.oct.16.hel<-distm(geo.dist.oct.16.hel,fun = distHaversine)
+d.geo.may.16.hel<-distm(geo.dist.may.16.hel,fun = distHaversine)
+d.geo.june.16.hel<-distm(geo.dist.june.16.hel,fun = distHaversine)
+
+dist.geo.sept.16.hel<-as.dist(d.geo.sept.16.hel)
+dist.geo.oct.16.hel<-as.dist(d.geo.oct.16.hel)
+dist.geo.may.16.hel<-as.dist(d.geo.may.16.hel)
+dist.geo.june.16.hel<-as.dist(d.geo.june.16.hel)
+
+
+##perform mantel tests 
+set.seed(14)
+abund.geo.sept.16.hel<-mantel(abundance.dist.sept.16.hel,dist.geo.sept.16.hel,method = "pearson", permutations = 9999, na.rm = TRUE)
+abund.geo.sept.16.hel
+abund.geo.oct.16.hel<-mantel(abundance.dist.oct.16.hel,dist.geo.oct.16.hel,method = "pearson", permutations = 9999, na.rm = TRUE)
+abund.geo.oct.16.hel
+abund.geo.may.16.hel<-mantel(abundance.dist.may.16.hel,dist.geo.may.16.hel,method = "pearson", permutations = 9999, na.rm = TRUE)
+abund.geo.may.16.hel
+abund.geo.june.16.hel<-mantel(abundance.dist.june.16.hel,dist.geo.june.16.hel,method = "pearson", permutations = 9999, na.rm = TRUE)
+abund.geo.june.16.hel
+
+padjust.mantel<-c(0.0036,0.0106,0.0247,0.002)
+padjust.mantel<-p.adjust(padjust.mantel) ### is this appropriate??? 
+
+##just as bad as non-hellinger transformed data.... 
+
+## lets try to visualize https://jkzorz.github.io/2019/07/09/scatter-plots.html
+##variables are not renamed for this analysis so they must be rerun for each visualization 
+aa <-as.vector(abundance.dist.sept.16.hel)
+gg<-as.vector(dist.geo.sept.16.hel)
+bb<-as.vector(abundance.dist.oct.16.hel)
+hh<-as.vector(dist.geo.oct.16.hel)
+cc <-as.vector(abundance.dist.may.16.hel)
+ii<-as.vector(dist.geo.may.16.hel)
+dd<-as.vector(abundance.dist.june.16.hel)
+jj<-as.vector(dist.geo.june.16.hel)
+
+ag<-data.frame(aa,gg)
+bh<-data.frame(bb,hh)
+ci<-data.frame(cc,ii)
+dj<-data.frame(dd,jj)
+
+
+sept.mantel.16.hel = ggplot(ag, aes(y = aa, x = gg)) + 
+    geom_point(size = 3, alpha = 0.5) + 
+    labs(x = "Physical distance", y = "Bray-Curtis Dissimilarity") + 
+    theme( axis.text.x = element_text(face = "bold",colour = "black", size = 12), 
+        axis.text.y = element_text(face = "bold", size = 11, colour = "black"), 
+        axis.title= element_text(face = "bold", size = 14, colour = "black"), 
+        panel.background = element_blank(), 
+        panel.border = element_rect(fill = NA, colour = "black"))
+sept.mantel.16.hel
+
+oct.mantel.16.hel = ggplot(bh, aes(y = bb, x = hh)) + 
+    geom_point(size = 3, alpha = 0.5) + 
+    labs(x = "Physical distance", y = "Bray-Curtis Dissimilarity") + 
+    theme( axis.text.x = element_text(face = "bold",colour = "black", size = 12), 
+        axis.text.y = element_text(face = "bold", size = 11, colour = "black"), 
+        axis.title= element_text(face = "bold", size = 14, colour = "black"), 
+        panel.background = element_blank(), 
+        panel.border = element_rect(fill = NA, colour = "black"))
+
+oct.mantel.16.hel
+
+may.mantel.16.hel = ggplot(ci, aes(y = cc, x = ii)) + 
+    geom_point(size = 3, alpha = 0.5) + 
+    labs(x = "Physical distance", y = "Bray-Curtis Dissimilarity") + 
+    theme( axis.text.x = element_text(face = "bold",colour = "black", size = 12), 
+        axis.text.y = element_text(face = "bold", size = 11, colour = "black"), 
+        axis.title= element_text(face = "bold", size = 14, colour = "black"), 
+        panel.background = element_blank(), 
+        panel.border = element_rect(fill = NA, colour = "black"))
+
+may.mantel.16.hel
+
+june.mantel.16.hel = ggplot(dj, aes(y = dd, x = jj)) + 
+    geom_point(size = 3, alpha = 0.5) + 
+    labs(x = "Physical distance", y = "Bray-Curtis Dissimilarity") + 
+    theme( axis.text.x = element_text(face = "bold",colour = "black", size = 12), 
+        axis.text.y = element_text(face = "bold", size = 11, colour = "black"), 
+        axis.title= element_text(face = "bold", size = 14, colour = "black"), 
+        panel.background = element_blank(), 
+        panel.border = element_rect(fill = NA, colour = "black"))
+
+june.mantel.16.hel
+
+ggarrange(sept.mantel.16.hel,oct.mantel.16.hel,may.mantel.16.hel,june.mantel.16.hel,font.label = c(size="5",face="plain"))
+
+```
+
+
+
+##check out the environmental variables
+```{r}
+#read in bulk soil data
+bulk.soil<-read_csv("Bulk.soil.data.sept23.2021.csv",col_names = TRUE)
+bulk.soil<-as.data.frame(bulk.soil)
+rownames(bulk.soil)<-bulk.soil$...1 # put sample names as row names
+bulk.soil$Cu<-as.numeric(bulk.soil$Cu) # make the elements with <DL numeric
+bulk.soil$B<-as.numeric(bulk.soil$B)
+bulk.soil$Na<-as.numeric(bulk.soil$Na)
+bulk.soil$Zn<-as.numeric(bulk.soil$Zn)
+bulk.soil$S<-as.numeric(bulk.soil$S)## error = indicating NAs are created by samples with values <DL
+bulk.soil<-bulk.soil[,c(-1,-20)] # remove outliers 
+bulk.soil$Severity<-c("Unburnt","Low","Unburnt","Medium","Unburnt","Medium-Severe","Medium-Severe","Medium","Severe","Severe","Severe","Medium-Severe","Severe","Medium","Low","Unburnt","LP-Severe","LP-Severe","LP-Severe","LP-Severe")
+bulk.soil$Severity<-factor(bulk.soil$Severity,levels = c("Unburnt","Low","Medium","Medium-Severe","Severe","LP-Severe"),ordered = TRUE)
+str(bulk.soil)
+
+#visual by severity
+ggplot(bulk.soil, aes(x = Severity, y = C)) +  
+    geom_point(size = 5, col = "firebrick", alpha = 0.5) + 
+    labs(x = "Severity", y = "%C") + 
+    theme_classic()
+
+ggplot(bulk.soil, aes(x = Severity, y = N)) +  
+    geom_point(size = 5, col = "firebrick", alpha = 0.5) + 
+    labs(x = "Severity", y = "%N") + 
+    theme_classic()
+
+ggplot(bulk.soil, aes(x = Severity, y = Mn)) +  
+    geom_point(size = 5, col = "firebrick", alpha = 0.5) + 
+    labs(x = "Severity", y = "Mn") + 
+    theme_classic()
+
+ggplot(bulk.soil, aes(x = Severity, y = Cu)) +  
+    geom_point(size = 5, col = "firebrick", alpha = 0.5) + 
+    labs(x = "Severity", y = "Cu") + 
+    theme_classic()
+
+ggplot(bulk.soil, aes(x = Severity, y = Ca)) +  
+    geom_point(size = 5, col = "firebrick", alpha = 0.5) + 
+    labs(x = "Severity", y = "Ca") + 
+    theme_classic()
+
+ggplot(bulk.soil, aes(x = Severity, y = Al)) +  
+    geom_point(size = 5, col = "firebrick", alpha = 0.5) + 
+    labs(x = "Severity", y = "Al") + 
+    theme_classic()
+
+ggplot(bulk.soil, aes(x = Severity, y = B)) +  
+    geom_point(size = 5, col = "firebrick", alpha = 0.5) + 
+    labs(x = "Severity", y = "B") + 
+    theme_classic()
+
+ggplot(bulk.soil, aes(x = Severity, y = P)) +  
+    geom_point(size = 5, col = "firebrick", alpha = 0.5) + 
+    labs(x = "Severity", y = "P(mg/kg)") + 
+    theme_classic()
+
+ggplot(bulk.soil, aes(x = Severity, y = Zn)) +  
+    geom_point(size = 5, col = "firebrick", alpha = 0.5) + 
+    labs(x = "Severity", y = "Zn(mg/kg)") + 
+    theme_classic()
+
+ggplot(bulk.soil, aes(x = Severity, y = Na)) +  
+    geom_point(size = 5, col = "firebrick", alpha = 0.5) + 
+    labs(x = "Severity", y = "Na(mg/kg)") + 
+    theme_classic()
+
+ggplot(bulk.soil, aes(x = Severity, y = K)) +  
+    geom_point(size = 5, col = "firebrick", alpha = 0.5) + 
+    labs(x = "Severity", y = "K(mg/kg)") + 
+    theme_classic()
+
+ggplot(bulk.soil, aes(x = Severity, y = Fe)) +  
+    geom_point(size = 5, col = "firebrick", alpha = 0.5) + 
+    labs(x = "Severity", y = "Fe(mg/kg)") + 
+    theme_classic()
+
+ggplot(bulk.soil, aes(x = Severity, y = S)) +  
+    geom_point(size = 5, col = "firebrick", alpha = 0.5) + 
+    labs(x = "Severity", y = "S(mg/kg)") + 
+    theme_classic()
+
+ggplot(bulk.soil, aes(x = Severity, y = `June.%.Moisture`)) +  
+    geom_point(size = 5, col = "firebrick", alpha = 0.5) + 
+    labs(x = "Severity", y = "% moisture") + 
+    theme_classic()
+
+##read in the soil data that is seperate for M and S horizons
+soil.data<-read_csv("soil.data.sept24.2021.csv", col_types = cols(`June.NO3(ppm)` = col_number()))
+soil.data<-as.data.frame(soil.data)
+rownames(soil.data)<-soil.data$...1 #make the sample names the row names
+soil.data<-soil.data[,2:ncol(soil.data)] # remove the row with sample names
+soil.data$Severity<-c("Unburnt","Low","Unburnt","Medium","Unburnt","Medium-Severe","Medium-Severe","Medium","Severe","Severe","Severe","Medium-Severe","Severe","Medium","Low","Unburnt","Unburnt","Low","Unburnt","Medium","Unburnt","Medium-Severe","Medium-Severe","Medium","Severe","Severe","Severe","Medium-Severe","Severe","Medium","Low","Unburnt","LP-Severe","LP-Severe","LP-Severe","LP-Severe","LP-Severe","LP-Severe","LP-Severe","LP-Severe") # add in severity level data 
+
+
+soil.data.june<-soil.data[,c(16,18,26,37,41)] #select columns for june only  (moisture, NO3, NH4, pH)
+rownames(soil.data.june)<-row.names(soil.data)
+soil.data.june$Sample_Type<-c(rep("Mineral",16),rep("Surface",16),rep("Mineral",4),rep("Surface",4)) #recreate metadata
+soil.data.june$Severity<-factor(soil.data.june$Severity,levels = c("Unburnt","Low","Medium","Medium-Severe","Severe","LP-Severe"),ordered = TRUE)
+View(soil.data.june)
+
+#visualize
+ggplot(soil.data.june, aes(x = Severity, y = `June.%.Moisture`,shape=Sample_Type)) +  
+    geom_point(size = 5, col = "firebrick", alpha = 0.5) + 
+    labs(x = "Severity", y = "Percent Moisture") + 
+    theme_classic()
+
+ggplot(soil.data.june, aes(x = Severity, y = June.pH,shape=Sample_Type)) +  
+    geom_point(size = 5, col = "firebrick", alpha = 0.5) + 
+    labs(x = "Severity", y = "pH") + 
+    theme_classic()
+
+ggplot(soil.data.june, aes(x = Severity, y = `June.NO3(mg/kg)dry`,shape=Sample_Type)) +  
+    geom_point(size = 5, col = "firebrick", alpha = 0.5) + 
+    labs(x = "Severity", y = "NO3") + 
+    theme_classic()
+
+ggplot(soil.data.june, aes(x = Severity, y = `June.NH4(mg/kg)dry`,shape=Sample_Type)) +  
+    geom_point(size = 5, col = "firebrick", alpha = 0.5) + 
+    labs(x = "Severity", y = "NH4") + 
+    theme_classic()
+
+
+#write june soil data file
+
+write.csv(soil.data.june, "june.soil.data.oct20.2021.csv")
+```
+##is there is a statistical difference in gravimetric soil moisture between months 
+```{r}
+soil.data.moisture.surface<-soil.data[17:32,13:16]
+soil.data.moisture.mineral<-soil.data[1:16,13:16]
+
+melt.moist.sur<-melt(soil.data.moisture.surface[,1:4],variable.name = "Moisture")
+melt.moist.min<-melt(soil.data.moisture.mineral[,1:4],variable.name = "Moisture")
+
+shapiro.test(melt.moist.min$value) # not sig 
+shapiro.test(melt.moist.sur$value) # very sig
+
+leveneTest(value~Moisture, data=melt.moist.sur)# sig
+leveneTest(value~Moisture, data= melt.moist.min) #sig 
+
+#transform (log doesnt work, squr is much worse, sqrt is best)
+melt.moist.min$value.sqrt<-sqrt(melt.moist.min$value)
+melt.moist.sur$value.sqrt<-sqrt(melt.moist.sur$value)
+
+shapiro.test(melt.moist.min$value.sqrt) # close 
+shapiro.test(melt.moist.sur$value.sqrt) # closer
+
+leveneTest(value.sqrt~Moisture, data=melt.moist.min)# close
+leveneTest(value.sqrt~Moisture, data= melt.moist.sur) #sig 
+
+sur.lm.moist<-lm(value.sqrt~Moisture, data = melt.moist.sur)
+sur.lm.moist.a1<-aov(value.sqrt~Moisture, data = melt.moist.sur)
+min.lm.moist<-lm(value.sqrt~Moisture, data = melt.moist.min)
+min.lm.moist.a1<-aov(value.sqrt~Moisture, data = melt.moist.min)
+
+anova(sur.lm.moist)
+summary(sur.lm.moist)
+TukeyHSD(sur.lm.moist.a1) #may and oct no sig dif
+plot(sur.lm.moist)
+
+anova(min.lm.moist)
+summary(min.lm.moist)
+TukeyHSD(min.lm.moist.a1)# no sig dif june oct
+plot(min.lm.moist)
+```
+
+
+##variation partitioning  and p-rda
+```{r}
+##first need to have env dataset with severty, sample data for all months (NO-LP severe and no 16)
+master.phylo.2.lp<-subset_samples(master.phylo, Severity != "LP-Severe") # first create phylo with no 
+master.phylo.2.lp.16<-subset_samples(master.phylo.2.lp, sample_names(master.phylo.2.lp) !="M16A")
+master.phylo.2.lp.16<-subset_samples(master.phylo.2.lp.16,sample_names(master.phylo.2.lp.16) !="M16C")
+master.phylo.2.lp.16<-subset_samples(master.phylo.2.lp.16,sample_names(master.phylo.2.lp.16) !="M16E")
+master.phylo.2.lp.16<-subset_samples(master.phylo.2.lp.16,sample_names(master.phylo.2.lp.16) !="M16G")
+master.phylo.2.lp.16<-subset_samples(master.phylo.2.lp.16,sample_names(master.phylo.2.lp.16) !="O16A")
+master.phylo.2.lp.16<-subset_samples(master.phylo.2.lp.16,sample_names(master.phylo.2.lp.16) !="O16C")
+master.phylo.2.lp.16<-subset_samples(master.phylo.2.lp.16,sample_names(master.phylo.2.lp.16) !="O16E")
+master.phylo.2.lp.16<-subset_samples(master.phylo.2.lp.16,sample_names(master.phylo.2.lp.16) !="O16G") # remove micro 16
+mineral.phylo<-subset_samples(master.phylo.2.lp.16, sample_type == "Mineral")
+organic.phylo<-subset_samples(master.phylo.2.lp.16, sample_type == "Surface")
+
+#seperate off the sample date and severity 
+meta.data.microplots.organic<-sample_data(organic.phylo)
+meta.data.microplots.organic<-meta.data.microplots.organic[,1:2]
+class(meta.data.microplots.organic)<-NULL
+meta.data.microplots.organic<-as.data.frame(meta.data.microplots.organic,row.names = sample_names(organic.phylo))
+meta.data.microplots.mineral<-sample_data(mineral.phylo)
+meta.data.microplots.mineral<-meta.data.microplots.mineral[,1:2]
+class(meta.data.microplots.mineral)<-NULL
+meta.data.microplots.mineral<-as.data.frame(meta.data.microplots.mineral,row.names = sample_names(mineral.phylo))
+
+#need to have conditioning matrix with lat and lon 
+lat.min<-sample_data(mineral.phylo)
+lat.min<-lat.min[,c(5,4)]
+class(lat.min)<-NULL
+lat.min<-as.data.frame(lat.min,row.names = sample_names(mineral.phylo))
+
+lat.org<-sample_data(organic.phylo)
+lat.org<-lat.org[,c(5,4)]
+class(lat.org)<-NULL
+lat.org<-as.data.frame(lat.org,row.names = sample_names(organic.phylo))
+
+d.geo.m<-distm(lat.min,fun = distHaversine) #calculate distances 
+d.geo.s<-distm(lat.org,fun = distHaversine)
+
+dist.geo.m<-as.dist(d.geo.m) # create distance object
+dist.geo.s<-as.dist(d.geo.s)
+
+dist.geo.m<-as.matrix(dist.geo.m) # change into matrix 
+dist.geo.s<-as.matrix(dist.geo.s)
+
+dist.eucli.m<-vegdist(dist.geo.m, method = "euclidean") #change from distance matrix to euclidean distance 
+dist.pcoa.m<-pcnm(dist.eucli.m) # use pcnm to get eigen vectors 
+dist.pcoa.m$vectors
+
+dist.eucli.s<-vegdist(dist.geo.s, method = "euclidean")
+dist.pcoa.s<-pcnm(dist.eucli.s)
+dist.pcoa.s$vectors
+
+##need to remove taxa that are zeros in dataset
+alltaxa.min<-otu_table(mineral.phylo)
+goodtaxa.min<-alltaxa.min[-which(rowSums(otu_table(mineral.phylo)) == 0),]
+goodtaxa.min<-otu_table(goodtaxa.min,taxa_are_rows = TRUE)
+taxa.good.min<-as.data.frame(rownames(goodtaxa.min))
+colnames(taxa.good.min)<-"full.taxa"
+taxa.good.min<-separate(taxa.good.min,col= "full.taxa",into = c("Kingdom","Phylum","Class","Order","Family","Genus","Species"),sep = ";")
+good.taxonomy.min<-tax_table(taxa.good.min)
+taxa_names(good.taxonomy.min)<-rownames(goodtaxa.min)
+sd.min<-sample_data(mineral.phylo)
+mineral.phylo.clean<-merge_phyloseq(sd.min,goodtaxa.min,good.taxonomy.min)
+mineral.phylo.clean #should be 505 taxa now
+
+alltaxa.org<-otu_table(organic.phylo)
+goodtaxa.org<-alltaxa.org[-which(rowSums(otu_table(organic.phylo)) == 0),]
+goodtaxa.org<-otu_table(goodtaxa.org,taxa_are_rows = TRUE)
+taxa.good.org<-as.data.frame(rownames(goodtaxa.org))
+colnames(taxa.good.org)<-"full.taxa"
+taxa.good.org<-separate(taxa.good.org,col= "full.taxa",into = c("Kingdom","Phylum","Class","Order","Family","Genus","Species"),sep = ";")
+good.taxonomy.org<-tax_table(taxa.good.org)
+taxa_names(good.taxonomy.org)<-rownames(goodtaxa.org)
+sd.org<-sample_data(organic.phylo)
+organic.phylo.clean<-merge_phyloseq(sd.org,goodtaxa.org,good.taxonomy.org)
+organic.phylo.clean #should be 648 taxa now
+
+##hellinger transform the mineral and organic dataset 
+spe.hel.min<-decostand(psotu2veg(mineral.phylo.clean),method = "hellinger")
+spe.hel.org<-decostand(psotu2veg(organic.phylo.clean),method = "hellinger")
+
+## suggests distance matrix for species not the best http://www.hiercourse.com/docs/variationPartitioning.html 
+
+#first mineral -----
+#first stepwise to see which distance vectors should be include
+min.pcnm <- capscale(spe.hel.min ~ ., 
+                     data=as.data.frame(scores(dist.pcoa.m)), 
+                     distance='bray')
+min.pcnm
+#set up null model
+mod0.pcnm <- capscale(spe.hel.min ~ 1, data=as.data.frame(scores(dist.pcoa.m)), distance='bray')
+#stepwise with ordi
+set.seed(16)
+step.pcnm <- ordistep(mod0.pcnm, scope=formula(min.pcnm))
+step.pcnm
+step.pcnm$anova # these are the signifcant axes 
+
+min.sub.pcnm<-scores(dist.pcoa.m,choices = c(1:6,8:13))
+
+##now var part with severity, sample data, spatial gradients
+
+set.seed(16)
+min.varpart<-varpart(spe.hel.min, 
+                     ~ Severity, 
+                     ~ sample_date, min.sub.pcnm, data = meta.data.microplots.mineral)
+min.varpart
+#plot
+par(mfrow=c(1, 2))
+showvarparts(3)
+plot(min.varpart)
+
+#test for significance
+
+#sev only
+sev.rda<-rda(spe.hel.min  ~ Severity + Condition(meta.data.microplots.mineral$sample_date) + Condition(min.sub.pcnm), 
+          data=meta.data.microplots.mineral)
+anova(sev.rda)
+summary(sev.rda)
+plot(sev.rda, scaling = 2)
+anova.cca(sev.rda)
+RsquareAdj(sev.rda)$adj.r.squared
+
+#date
+date.rda<-rda(spe.hel.min  ~ sample_date + Condition(meta.data.microplots.mineral$Severity)  
+          + Condition(min.sub.pcnm), 
+          data=meta.data.microplots.mineral)
+anova(date.rda)
+summary(date.rda)
+plot(date.rda)
+
+#dist
+dist.rda<-rda(spe.hel.min  ~ min.sub.pcnm + Condition(meta.data.microplots.mineral$Severity)  
+          + Condition(meta.data.microplots.mineral$sample_date), 
+          data=meta.data.microplots.mineral)
+anova(dist.rda)
+
+#sev and date
+set.seed(14)
+min.sev.date.rda<-rda(spe.hel.min  ~ Severity * sample_date + Condition(min.sub.pcnm), 
+          data=meta.data.microplots.mineral)
+anova(min.sev.date.rda, by = "terms")
+anova(min.sev.date.rda, by= "axis")
+summary(min.sev.date.rda)
+plot(min.sev.date.rda, scaling = 2)
+RsquareAdj(min.sev.date.rda)$adj.r.squared
+alias(min.sev.date.rda)
+#improve plotting
+colvec<-c("cornflowerblue","lightgoldenrod1","orange1","firebrick3","tomato4")
+colvec.2<-c("cornflowerblue","chocolate","orange1","firebrick3","tomato4")
+shvec<-c(21,22,23,24) #point shape vector
+plot(min.sev.date.rda,type="n",scaling=2)
+text(min.sev.date.rda, display = "bp")
+with(meta.data.microplots.mineral, points(min.sev.date.rda, display = "species",col="darkcyan",pch=1,cex=0.5))
+with(meta.data.microplots.mineral, points(min.sev.date.rda, display = "sites",col=colvec[Severity],pch=shvec[sample_date],bg=colvec[Severity]))
+with(meta.data.microplots.mineral, legend("topright", legend = levels(Severity), bty = "n",
+                      col = colvec, pch = 21, pt.bg = colvec.2)) # add colour legend
+with(meta.data.microplots.mineral, legend("bottomright", legend = levels(sample_date), bty = "n",
+                       col = colvec, pch = shvec)) # add shape legend 
+
+min.sev.date.scores<-as.data.frame(scores(min.sev.date.rda, choices = c(1:3),display = "sites"))# extract scores for 3d
+##plot 3d min  ----
+plot3d(min.sev.date.scores,col=colvec[meta.data.microplots.mineral$Severity],size=1)+
+#text3d(min.sev.date.scores$RDA1, min.sev.date.scores$RDA2, min.sev.date.scores$RDA3, texts = row.names(min.sev.date.scores),adj = 1.1)#add labels to points and offset 
+pch3d(min.sev.date.scores$RDA1, min.sev.date.scores$RDA2 , min.sev.date.scores$RDA3 , pch =shvec[meta.data.microplots.mineral$sample_date],col = colvec.2[meta.data.microplots.mineral$Severity], bg=colvec[meta.data.microplots.mineral$Severity],lwd=4,radius = 0.06)
+movie3d(spin3d(axis = c(1, 0, 1)), duration = 40,
+        dir = getwd(),convert = NULL, movie = "min.3d.jan11.2022.rda",clean = TRUE,fps=20) ##opptional add spin 
+
+#test for colinearity of this model (note the conditioned and constrained factors tested together... )
+vif.cca(min.sev.date.rda)
+# I believe that the high VIF for severity can be ignored both because it was analysed with the conditioned variables and it is a factor variable with more than 3 categores? (https://statisticalhorizons.com/multicollinearity)
+
+#plot all rda axes and arrange 
+min.sev.date.scores.1.2<-scores(min.sev.date.rda,choices = c(1,2),display = "sites")
+plot(min.sev.date.scores.1.2,ylab = "RDA2 (4.9%)",xlab = "RDA1 (21.9%)", col=colvec.2[meta.data.microplots.mineral$Severity],pch=shvec[meta.data.microplots.mineral$sample_date],bg=colvec[meta.data.microplots.mineral$Severity],ylim = c(-1.1,1),xlim = c(-0.8,0.8))
+
+#alternate style
+colvec.3<-c("cornflowerblue","gold1","orange1","firebrick3","tomato4")
+shvec.3<-c(1,0,9,2) #point shape vector
+
+min.sev.date.scores.1.2<-scores(min.sev.date.rda,choices = c(1,2),display = "sites")
+plot(min.sev.date.scores.1.2,ylab = "RDA2 (4.9%)",xlab = "RDA1 (21.9%)", col=colvec.3[meta.data.microplots.mineral$Severity],pch=shvec.3[meta.data.microplots.mineral$sample_date],bg=colvec.3[meta.data.microplots.mineral$Severity],ylim = c(-1,1),xlim = c(-0.8,0.8),lwd=2)
+
+#min.sev.date.scores.2.3<-scores(min.sev.date.rda,choices = c(2,3),display = "sites")
+#plot(min.sev.date.scores.2.3,ylab = "RDA3 (3.1%)",xlab = "RDA2 (3.9%)", col=colvec.2[meta.data.microplots.mineral$Severity],pch=shvec[meta.data.microplots.mineral$sample_date],bg=colvec[meta.data.microplots.mineral$Severity],ylim = c(-1,1),xlim = c(-1,1))
+
+#min.sev.date.scores.1.3<-scores(min.sev.date.rda,choices = c(1,3),display = "sites")
+#plot(min.sev.date.scores.1.3, ylab = "RDA3 (3.1%)",xlab = "RDA1 (5.2%)", col=colvec.2[meta.data.microplots.mineral$Severity],pch=shvec[meta.data.microplots.mineral$sample_date],bg=colvec[meta.data.microplots.mineral$Severity],ylim = c(-1,1),xlim = c(-1,1))
+
+# now run for surface -----
+org.pcnm <- capscale(spe.hel.org ~ ., 
+                     data=as.data.frame(scores(dist.pcoa.s)), 
+                     distance='bray')
+org.pcnm
+#set up null model
+sod0.pcnm <- capscale(spe.hel.org ~ 1, data=as.data.frame(scores(dist.pcoa.s)), distance='bray')
+#stepwise with ordi
+set.seed(16)
+step.pcnm.s <- ordistep(sod0.pcnm, scope=formula(org.pcnm))
+step.pcnm.s
+step.pcnm.s$anova # these are the signifcant axes 
+
+org.sub.pcnm<-scores(dist.pcoa.s,choices = c(1:2,5,8,10:11))
+
+##now var part with severity, sample data, spatial gradients
+
+set.seed(16)
+org.varpart<-varpart(spe.hel.org, 
+                     ~ Severity, 
+                     ~ sample_date, org.sub.pcnm, data = meta.data.microplots.organic)
+org.varpart
+#plot
+par(mfrow=c(1, 2))
+showvarparts(3)
+plot(org.varpart)
+
+#test for significance
+
+#sev only
+sev.rda<-rda(spe.hel.org  ~ Severity + Condition(meta.data.microplots.organic$sample_date) + Condition(org.sub.pcnm), 
+          data=meta.data.microplots.organic)
+anova(sev.rda)
+summary(sev.rda)
+plot(sev.rda, scaling = 2)
+RsquareAdj(sev.rda)$adj.r.squared
+
+#date
+date.rda<-rda(spe.hel.org  ~ sample_date + Condition(meta.data.microplots.organic$Severity)  
+          + Condition(org.sub.pcnm), 
+          data=meta.data.microplots.organic)
+anova(date.rda)
+summary(date.rda)
+plot(date.rda)
+#dist
+dist.rda<-rda(spe.hel.org  ~ org.sub.pcnm + Condition(meta.data.microplots.organic$Severity)  
+          + Condition(meta.data.microplots.organic$sample_date), 
+          data=meta.data.microplots.organic)
+anova(dist.rda)
+
+#sev and date
+set.seed(14)
+sev.date.rda<-rda(spe.hel.org  ~ Severity * sample_date + Condition(org.sub.pcnm), 
+          data=meta.data.microplots.organic)
+anova(sev.date.rda, by= "terms")
+anova(sev.date.rda, by = "axis")
+summary(sev.date.rda)
+plot(sev.date.rda, scaling = 2)
+RsquareAdj(sev.date.rda)$adj.r.squared
+alias(sev.date.rda) # nothing is aliased
+#improve plotting
+shvec<-c(21,22,23,24) #point shape vector
+plot(sev.date.rda,type="n",scaling=2)
+text(sev.date.rda, display = "bp")
+with(meta.data.microplots.organic, points(sev.date.rda, display = "species",col="darkcyan",pch=1,cex=0.5))
+with(meta.data.microplots.organic, points(sev.date.rda, display = "sites",col=colvec[Severity],pch=shvec[sample_date],bg=colvec[Severity]))
+
+org.sev.date.scores<-as.data.frame(scores(sev.date.rda, choices = c(1:3),display = "sites"))# extract scores for 3d
+##plot 3d sur ----
+plot3d(org.sev.date.scores,col=colvec[meta.data.microplots.organic$Severity],size=1)+
+#text3d(org.sev.date.scores$RDA1, org.sev.date.scores$RDA2, org.sev.date.scores$RDA3, texts = row.names(org.sev.date.scores),adj = 1.1)#add labels to points and offset 
+pch3d(org.sev.date.scores$RDA1, org.sev.date.scores$RDA2 , org.sev.date.scores$RDA3 , pch =shvec[meta.data.microplots.organic$sample_date], col = colvec.2[meta.data.microplots.organic$Severity],bg=colvec[meta.data.microplots.organic$Severity],radius=0.05,lwd=4)
+movie3d(spin3d(axis = c(1, 0, 1)), duration = 20,
+        dir = getwd(),convert = NULL, movie = "org.3d.dec8.2021.rda",clean = TRUE) ##opptional add spin
+
+
+#test for colinearity in this model 
+vif.cca(sev.date.rda) # severity.L is over 10 but again I believe this can be ignored due to factor with more than 3 terms (https://statisticalhorizons.com/multicollinearity)
+
+#plot all rda axes and arrange 
+org.sev.date.scores.1.2<-scores(sev.date.rda,choices = c(1,2),display = "sites")
+plot(org.sev.date.scores.1.2,ylab = "RDA2 (6.5%)",xlab = "RDA1 (34.8%)", col=colvec.2[meta.data.microplots.organic$Severity],pch=shvec[meta.data.microplots.organic$sample_date],bg=colvec[meta.data.microplots.organic$Severity],ylim = c(-1,1),xlim = c(-0.6,0.6))
+
+#alternate points
+plot(org.sev.date.scores.1.2,ylab = "RDA2 (6.5%)",xlab = "RDA1 (34.8%)", col=colvec.3[meta.data.microplots.organic$Severity],pch=shvec.3[meta.data.microplots.organic$sample_date],bg=colvec.3[meta.data.microplots.organic$Severity],ylim = c(-1,1),xlim = c(-1,1),lwd=2)
+
+#org.sev.date.scores.2.3<-scores(sev.date.rda,choices = c(2,3),display = "sites")
+#plot(org.sev.date.scores.2.3,ylab = "RDA3 (2.8%)",xlab = "RDA2 (6.5%)", col=colvec.2[meta.data.microplots.organic$Severity],pch=shvec[meta.data.microplots.organic$sample_date],bg=colvec[meta.data.microplots.organic$Severity],ylim = c(-1,1),xlim = c(-1,1))
+
+#org.sev.date.scores.1.3<-scores(sev.date.rda,choices = c(1,3),display = "sites")
+#plot(org.sev.date.scores.1.3, ylab = "RDA3 (2.8%)",xlab = "RDA1 (10.0%)", col=colvec.2[meta.data.microplots.organic$Severity],pch=shvec[meta.data.microplots.organic$sample_date],bg=colvec[meta.data.microplots.organic$Severity],ylim = c(-1,1),xlim = c(-1,1))
+
+```
+
+##varition partioning and p-rda with only june - including the soil characteristics
+```{r}
+# first create env characterisitcs data frame (severity, sample_date and ph and extractable values etc.) # not including the microplots 16 ----
+env.min.meta<-cbind(soil.data.june[1:15,],bulk.soil[1:15,-c(1,2,3,4,19)])
+env.min.meta$`C/N`<-env.min.meta$C/env.min.meta$N #create C:N 
+env.org.meta<-cbind(soil.data.june[17:31,],bulk.soil[1:15,-c(1,2,3,4,19)])
+env.org.meta$`C/N`<-env.org.meta$C/env.org.meta$N #create C:N 
+
+##log varaibles that have a lot of spread 
+##log the variables that have outliers 
+env.min.meta$logC<-log(env.min.meta$C)
+env.min.meta$logP<-log(env.min.meta$P)
+env.min.meta$logN<-log(env.min.meta$N)
+env.min.meta$logB<-log(env.min.meta$B)
+env.min.meta$logCa<-log(env.min.meta$Ca)
+env.min.meta$logK<-log(env.min.meta$K)
+env.min.meta$logMg<-log(env.min.meta$Mg)
+env.min.meta$logNa<-log(env.min.meta$Na)
+env.min.meta$logS<-log(env.min.meta$S)
+
+#for surface
+env.org.meta$logP<-log(env.org.meta$P)
+env.org.meta$logN<-log(env.org.meta$N)
+env.org.meta$logC<-log(env.org.meta$C)
+env.org.meta$logCa<-log(env.org.meta$Ca)
+env.org.meta$logK<-log(env.org.meta$K)
+env.org.meta$logMg<-log(env.org.meta$Mg)
+env.org.meta$logNH4<-log(env.org.meta$`June.NH4(mg/kg)dry`+1)
+
+#need to have conditioning matrix with lat and lon ----
+lat.min.june<-sample_data(subset_samples(mineral.phylo, sample_date == "June"))
+lat.min.june<-lat.min.june[,c(5,4)]
+class(lat.min.june)<-NULL
+lat.min.june<-as.data.frame(lat.min.june,row.names = row.names(env.min.meta))
+
+lat.org.june<-sample_data(subset_samples(organic.phylo, sample_date == "June"))
+lat.org.june<-lat.org.june[,c(5,4)]
+class(lat.org.june)<-NULL
+lat.org.june<-as.data.frame(lat.org.june,row.names = row.names(env.org.meta))
+
+d.geo.mj<-distm(lat.min.june,fun = distHaversine) #calculate distances 
+d.geo.sj<-distm(lat.org.june,fun = distHaversine)
+
+dist.geo.mj<-as.dist(d.geo.mj) # create distance object
+dist.geo.sj<-as.dist(d.geo.sj)
+
+dist.geo.mj<-as.matrix(dist.geo.mj) # change into matrix 
+dist.geo.sj<-as.matrix(dist.geo.sj)
+
+dist.eucli.mj<-vegdist(dist.geo.mj, method = "euclidean") #change from distance matrix to euclidean distance 
+dist.pcoa.mj<-pcnm(dist.eucli.mj) # use pcnm to get eigen vectors 
+dist.pcoa.mj$vectors
+
+dist.eucli.sj<-vegdist(dist.geo.sj, method = "euclidean")
+dist.pcoa.sj<-pcnm(dist.eucli.sj)
+dist.pcoa.sj$vectors
+
+##now make sure I have community matrix in correct format ---- (chanaged on jan 18th to mineral.organic.phylo the non-transformed data)
+june.phylo.2.min<-subset_samples(mineral.phylo, sample_date == "June")
+june.phylo.2.org<-subset_samples(organic.phylo, sample_date == "June")
+
+#remove taxa with zeros 
+alltaxa.june.min<-otu_table(june.phylo.2.min)
+goodtaxa.june.min<-alltaxa.june.min[-which(rowSums(otu_table(june.phylo.2.min)) == 0),]
+goodtaxa.june.min<-otu_table(goodtaxa.june.min,taxa_are_rows = TRUE)
+taxa.good.june.min<-as.data.frame(rownames(goodtaxa.june.min))
+colnames(taxa.good.june.min)<-"full.taxa"
+taxa.good.june.min<-separate(taxa.good.june.min,col= "full.taxa",into = c("Kingdom","Phylum","Class","Order","Family","Genus","Species"),sep = ";")
+good.taxonomy.june.min<-tax_table(taxa.good.june.min)
+taxa_names(good.taxonomy.june.min)<-rownames(goodtaxa.june.min)
+sd.june.min<-sample_data(june.phylo.2.min)
+phylo.june.min<-merge_phyloseq(sd.june.min,goodtaxa.june.min,good.taxonomy.june.min)
+phylo.june.min
+
+spe.hel.june.min<-decostand(psotu2veg(phylo.june.min),method = "hellinger") #now transforming 
+
+#surface now 
+alltaxa.june.org<-otu_table(june.phylo.2.org)
+goodtaxa.june.org<-alltaxa.june.org[-which(rowSums(otu_table(june.phylo.2.org)) == 0),]
+goodtaxa.june.org<-otu_table(goodtaxa.june.org,taxa_are_rows = TRUE)
+taxa.good.june.org<-as.data.frame(rownames(goodtaxa.june.org))
+colnames(taxa.good.june.org)<-"full.taxa"
+taxa.good.june.org<-separate(taxa.good.june.org,col= "full.taxa",into = c("Kingdom","Phylum","Class","Order","Family","Genus","Species"),sep = ";")
+good.taxonomy.june.org<-tax_table(taxa.good.june.org)
+taxa_names(good.taxonomy.june.org)<-rownames(goodtaxa.june.org)
+sd.june.org<-sample_data(june.phylo.2.org)
+phylo.june.org<-merge_phyloseq(sd.june.org,goodtaxa.june.org,good.taxonomy.june.org)
+phylo.june.org
+
+spe.hel.june.org<-decostand(psotu2veg(phylo.june.org),method = "hellinger")
+
+#first mineral -----
+#first stepwise to see which distance vectors should be include
+min.pcnm.june <- capscale(spe.hel.june.min ~ ., 
+                     data=as.data.frame(scores(dist.pcoa.mj)), 
+                     distance='bray')
+min.pcnm.june
+#set up null model
+mod0.pcnm.j <- capscale(spe.hel.june.min ~ 1, data=as.data.frame(scores(dist.pcoa.mj)), distance='bray')
+set.seed(18)
+#stepwise with ordi
+step.pcnm.j <- ordistep(mod0.pcnm.j, scope=formula(min.pcnm.june))
+step.pcnm.j
+step.pcnm.j$anova # these are the signifcant axes 
+
+min.sub.pcnm.j<-scores(dist.pcoa.mj,choices = c(1,2,5))
+
+#then stepwise to see which soil variable should be include --> only test varaibles greater than DL (expection only one missing for NH4)
+min.stepsoil.june <- capscale(spe.hel.june.min ~ June.pH +logC+logN+`C/N`+`June.NH4(mg/kg)dry`+logP+Al+logCa+Fe+logK+Mg+Mn, 
+                     data=env.min.meta, 
+                     distance='bray')
+min.stepsoil.june
+#set up null model
+mod0.soil.j <- capscale(spe.hel.june.min ~ 1, data=env.min.meta, distance='bray')
+#stepwise with ordi
+set.seed(23)
+step.soil.j <- ordistep(mod0.soil.j, scope=formula(min.stepsoil.june))
+step.soil.j
+step.soil.j$anova # these are the signifcant axes --> only log C 
+
+
+##now var part with severity, soil characteristics (only ones selected by ordistep), spatial gradients
+
+min.varpart.june<-varpart(spe.hel.june.min, 
+                     ~ Severity, 
+                     ~ logC , min.sub.pcnm.j, data = env.min.meta)
+min.varpart.june
+#plot
+par(mfrow=c(1, 2))
+showvarparts(3)
+plot(min.varpart.june)
+
+#test for significance
+
+#sev only
+sev.rda.june<-rda(spe.hel.june.min  ~ Severity + Condition(env.min.meta$`C/N`)+Condition(env.min.meta$Al) + Condition(min.sub.pcnm.j), 
+          data=env.min.meta)
+anova(sev.rda.june)
+summary(sev.rda.june)
+plot(sev.rda.june, scaling = 2)
+anova.cca(sev.rda)
+RsquareAdj(sev.rda.june)$adj.r.squared
+
+
+#soil and sev variables 
+sev.soil.rda.june<-rda(spe.hel.june.min  ~ Severity+logC + Condition(min.sub.pcnm.j), 
+          data=env.min.meta)
+anova(sev.soil.rda.june)
+summary(sev.soil.rda.june)
+plot(sev.soil.rda.june, scaling = 2)
+RsquareAdj(sev.soil.rda.june)$adj.r.squared
+
+colvec<-c("cornflowerblue","lightgoldenrod1","orange1","firebrick3","tomato4")
+colvec.2
+plot(sev.soil.rda.june,type="n")
+text(sev.soil.rda.june, display = "bp")
+with(env.min.meta, points(sev.soil.rda.june, display = "species",col="darkcyan",pch=1,cex=0.5))
+with(env.min.meta, points(sev.soil.rda.june, display = "sites",col=colvec[Severity],pch=21,bg=colvec[Severity]))
+
+vif.cca(sev.soil.rda.june) # no issues
+
+#dist
+dist.rda.june<-rda(spe.hel.june.min  ~ min.sub.pcnm.j + Condition(env.min.meta$Severity)+ Condition(env.min.meta$`C/N`)+ Condition(env.min.meta$Al), 
+          data=env.min.meta)
+anova(dist.rda.june)
+
+##nothing is signifcant for june.... 
+
+## now run for surface -----
+org.pcnm.june <- capscale(spe.hel.june.org ~ ., 
+                     data=as.data.frame(scores(dist.pcoa.sj)), 
+                     distance='bray')
+org.pcnm.june
+#set up null model
+sod0.pcnm.j <- capscale(spe.hel.june.org ~ 1, data=as.data.frame(scores(dist.pcoa.sj)), distance='bray')
+#stepwise with ordi
+set.seed(18)
+step.pcnm.sj <- ordistep(sod0.pcnm.j, scope=formula(org.pcnm.june))
+step.pcnm.sj
+step.pcnm.sj$anova # these are the signifcant axes 
+
+org.sub.pcnm.j<-scores(dist.pcoa.sj,choices = c(1,5))
+
+#then stepwise to see which soil variable should be include --> only test varaibles greater than DL (expection only one missing for NH4)
+org.stepsoil.june <- capscale(spe.hel.june.org ~ June.pH+logC+logN+`C/N`+logNH4+logP+Al+logCa+Fe+logK+logMg+Mn, 
+                     data=env.org.meta, 
+                     distance='bray')
+org.stepsoil.june
+#set up null model
+mod0.soil.j <- capscale(spe.hel.june.org ~ 1, data=env.org.meta, distance='bray')
+set.seed(18)
+#stepwise with ordi
+step.soil.j <- ordistep(mod0.soil.j, scope=formula(org.stepsoil.june))
+step.soil.j
+step.soil.j$anova # these are the signifcant axes --> only log C
+
+##now var part with severity, sample data, spatial gradients
+
+org.varpart.june<-varpart(spe.hel.june.org, 
+                     ~ Severity, 
+                     ~ logC, org.sub.pcnm.j, data = env.org.meta)
+org.varpart.june
+#plot
+par(mfrow=c(1, 2))
+showvarparts(3)
+plot(org.varpart)
+
+#test for significance
+
+#sev only
+sev.rda.june<-rda(spe.hel.june.org  ~ Severity + Condition(env.org.meta$Al) + Condition(org.sub.pcnm.j), 
+          data=env.org.meta)
+anova(sev.rda.june)
+summary(sev.rda)
+plot(sev.rda, scaling = 2)
+RsquareAdj(sev.rda)$adj.r.squared
+
+#sev and soil
+sev.soil.rda.june<-rda(spe.hel.june.org  ~ Severity + logC + Condition(org.sub.pcnm.j), 
+          data=env.org.meta)
+anova(sev.soil.rda.june)
+summary(sev.soil.rda.june)
+plot(sev.soil.rda.june, scaling = 2)
+RsquareAdj(sev.soil.rda.june)$adj.r.squared
+
+plot(sev.soil.rda.june,type="n")
+text(sev.soil.rda.june, display = "bp")
+with(env.min.meta, points(sev.soil.rda.june, display = "species",col="darkcyan",pch=1,cex=0.5))
+with(env.min.meta, points(sev.soil.rda.june, display = "sites",col=colvec[Severity],pch=21,bg=colvec[Severity]))
+
+
+#dist
+dist.rda.june<-rda(spe.hel.june.org  ~ org.sub.pcnm.j + Condition(env.org.meta$Severity)  
+          + Condition(env.org.meta$Al), 
+          data=env.org.meta)
+anova(dist.rda.june)
+
+```
+
+
+#unused code
+```{r}
+#create pcnm vectors from distance between microplots - min and sur seperatley 
+sd.june<-sample_data(june.phylo.2) #extract metadata from june phyloseq object
+sd.june.m<-subset_samples(sd.june, sample_type == "Mineral") # subset into only mineral and surface 
+sd.june.s<-subset_samples(sd.june, sample_type == "Surface")
+
+geo.dist.june.m<-cbind(sd.june.m$lon,sd.june.m$lat) #create dataframe of only the lat and lon coordinates
+geo.dist.june.s<-cbind(sd.june.s$lon,sd.june.s$lat)
+
+d.geo.june.m<-distm(geo.dist.june.m,fun = distHaversine) #calculate distances 
+d.geo.june.s<-distm(geo.dist.june.s,fun = distHaversine)
+
+dist.geo.june.m<-as.dist(d.geo.june.m) # create distance object
+dist.geo.june.s<-as.dist(d.geo.june.s)
+
+dist.geo.june.m<-as.matrix(dist.geo.june.m) # change into matrix 
+dist.geo.june.m<-dist.geo.june.m[-18,-18] # remove the outlier sample
+
+dist.geo.june.s<-as.matrix(dist.geo.june.s)
+dist.geo.june.s<-dist.geo.june.s[-18,-18]
+
+dist.eucli<-vegdist(dist.geo.june.m, method = "euclidean") #change from distance matrix to euclidean distance 
+dist.pcoa<-pcnm(dist.eucli) # use pcnm to get eigen vectors 
+dist.pcoa$vectors
+
+dist.eucli.s<-vegdist(dist.geo.june.s, method = "euclidean")
+dist.pcoa.s<-pcnm(dist.eucli.s)
+dist.pcoa.s$vectors
+```
+
+```{r}
+##attempt RDA 
+#constrained ordination with linear distribution of taxa
+##use hellinger transformed data
+
+##create matrix with the environmental data for mineral only 
+env.june.m<-soil.data.june[c(1:16,33:36),-6]
+env.june.m<-cbind(env.june.m,bulk.soil[,5:18])
+env.june.m$`C/N`<-env.june.m$C/env.june.m$N
+str(env.june.m)
+##create matrix with the environmental data for surface only   
+env.june.s<-soil.data.june[c(17:32,37:40),-6]
+env.june.s<-cbind(env.june.s,bulk.soil[,1:18])
+env.june.s$`C/N`<-env.june.s$C/env.june.s$N
+
+##create taxa 
+#subset
+june.phylo.2<-subset_samples(master.phylo.2, sample_date=="June")
+
+#remove zero taxa 
+alltaxa.june.2<-otu_table(june.phylo.2)
+goodtaxa.june.2<-alltaxa.june.2[-which(rowSums(otu_table(june.phylo.2)) == 0),]
+goodtaxa.june.2<-otu_table(goodtaxa.june.2,taxa_are_rows = TRUE)
+taxa.good.june.2<-as.data.frame(rownames(goodtaxa.june.2))
+colnames(taxa.good.june.2)<-"full.taxa"
+taxa.good.june.2<-separate(taxa.good.june.2,col= "full.taxa",into = c("Kingdom","Phylum","Class","Order","Family","Genus","Species"),sep = ";")
+good.taxonomy.june.2<-tax_table(taxa.good.june.2)
+taxa_names(good.taxonomy.june.2)<-rownames(goodtaxa.june.2)
+#remerge
+june.phylo.2<-merge_phyloseq(sd.june,goodtaxa.june.2,good.taxonomy.june.2)
+sample_data(june.phylo.2)
+
+#LP-S 2 is an outlier for many of things variables in order to have linearity I am going to remove it for this analysis
+env.june.m<-env.june.m[-18,]
+june.taxa.m<-june.taxa.m[-18,]
+
+june.taxa<-psotu2veg(june.phylo.2)
+june.taxa.m<-as.data.frame(june.taxa[c(1:16,33:36),])
+june.m.row.names<-row.names(june.taxa.m)
+june.taxa.m$row.namesjune<-june.m.row.names
+june.taxa.m$order<-c(10:16,1:9,17:19)
+june.taxa.m<-as_tibble(june.taxa.m)
+june.taxa.m<-arrange(june.taxa.m,order)
+june.taxa.m<-as.data.frame(june.taxa.m)
+row.names(june.taxa.m)<-june.taxa.m$row.namesjune
+june.taxa.m<-june.taxa.m[,c(-686,-687)]
+
+june.taxa.s<-as.data.frame(june.taxa[c(17:32,37:40),])
+
+#some taxa are either absent from mineral or surface so need to remove those from the dataset
+length(which(colSums(june.taxa.m) == 0))
+june.taxa.m<-june.taxa.m[,-which(colSums(june.taxa.m) == 0)]
+length(which(colSums(june.taxa.m) == 0))
+
+env.june.s<-env.june.s[-18,]
+june.taxa.s<-june.taxa.s[-18,]
+
+june.taxa.s<-as.data.frame(june.taxa[c(17:32,37:40),])
+june.s.row.names<-row.names(june.taxa.s)
+june.taxa.s$row.namesjune<-june.s.row.names
+june.taxa.s$order<-c(10:16,1:9,17:19)
+june.taxa.s<-as_tibble(june.taxa.s)
+june.taxa.s<-arrange(june.taxa.s,order)
+june.taxa.s<-as.data.frame(june.taxa.s)
+row.names(june.taxa.s)<-june.taxa.s$row.namesjune
+june.taxa.s<-june.taxa.s[,c(-686,-687)]
+
+#some taxa are either absent from mineral or surface so need to remove those from the dataset
+length(which(colSums(june.taxa.s) == 0))
+june.taxa.s<-june.taxa.s[,-which(colSums(june.taxa.s) == 0)]
+length(which(colSums(june.taxa.s) == 0))
+
+
+##investigate linearity 
+colnames(june.taxa.m)
+plot(june.taxa.m$`k__Fungi;p__Ascomycota;c__Pezizomycetes;o__Pezizales;f__Pyronemataceae;g__Geopyxis;s__Geopyxis_carbonaria`, env.june.m$June.pH)
+plot(june.taxa.m$`k__Fungi;p__Ascomycota;c__Pezizomycetes;o__Pezizales;f__Pyronemataceae;g__Geopyxis;s__Geopyxis_carbonaria`, env.june.m$logC)
+plot(june.taxa.m$`k__Fungi;p__Ascomycota;c__Leotiomycetes;o__Helotiales;__;__;__`, env.june.m$June.pH)
+plot(env.june.m$June.pH,env.june.m$logN)
+plot(env.june.m$logC,env.june.m$logN)
+plot(env.june.m$`June.NH4(mg/kg)dry`,env.june.m$Severity)
+plot(env.june.m$`June.NH4(mg/kg)dry`,env.june.m$logC)
+plot(env.june.m$`June.NO3(mg/kg)dry`,env.june.m$Severity)
+plot(env.june.m$`June.NO3(mg/kg)dry`,env.june.m$logN)
+plot(env.june.m$logNO3,env.june.m$Severity)
+plot(env.june.m$logP, env.june.m$June.pH)
+plot(env.june.m$`C/N`,env.june.m$June.pH)
+plot(env.june.m$Al, env.june.m$logB)
+plot(env.june.m$logCa, june.taxa.m$`k__Fungi;p__Basidiomycota;c__Agaricomycetes;o__Agaricales;f__Cortinariaceae;g__Cortinarius;s__Cortinarius_colymbadinus`)
+plot(env.june.m$Cu, june.taxa.m$`k__Fungi;p__Basidiomycota;c__Agaricomycetes;o__Agaricales;f__Tricholomataceae;g__Mycena;__`)
+plot(env.june.m$Fe, june.taxa.m$`k__Fungi;p__Ascomycota;c__Dothideomycetes;o__Venturiales;f__Sympoventuriaceae;g__Fusicladium;__`)
+plot(env.june.m$logK, june.taxa.m$`k__Fungi;p__Ascomycota;c__Dothideomycetes;o__Venturiales;f__Sympoventuriaceae;g__Fusicladium;__`)
+plot(env.june.m$Mg, june.taxa.m$`k__Fungi;p__Ascomycota;c__Dothideomycetes;o__Venturiales;f__Sympoventuriaceae;g__Fusicladium;__`)
+plot(env.june.m$Mn, june.taxa.m$`k__Fungi;p__Ascomycota;c__Leotiomycetes;o__Helotiales;f__Myxotrichaceae;g__Oidiodendron;s__Oidiodendron_maius`)
+plot(env.june.m$Na, june.taxa.m$`k__Fungi;p__Ascomycota;c__Leotiomycetes;o__Helotiales;f__Myxotrichaceae;g__Oidiodendron;s__Oidiodendron_maius`)
+plot(env.june.m$logS, june.taxa.m$`k__Fungi;p__Ascomycota;c__Taphrinomycetes;o__Taphrinales;f__Protomycetaceae;g__Saitoella;s__Saitoella_complicata`)
+plot(env.june.m$Zn, june.taxa.m$k__Fungi.p__Basidiomycota.c__Geminibasidiomycetes.o__Geminibasidiales.f__Geminibasidiaceae.g__Basidioascus.s__Basidioascus_undulatus)
+
+#LP-S 2 is an outlier for many of things variables in order to have linearity I am going to remove it for this analysis
+env.june.m<-env.june.m[-18,]
+june.taxa.m<-june.taxa.m[-18,]
+
+#for surface
+plot(june.taxa.s$`k__Fungi;p__Ascomycota;c__Pezizomycetes;o__Pezizales;f__Pyronemataceae;g__Geopyxis;s__Geopyxis_carbonaria`, env.june.s$June.pH)
+plot(june.taxa.s$`k__Fungi;p__Ascomycota;c__Leotiomycetes;o__Helotiales;__;__;__`, env.june.s$June.pH)
+plot(june.taxa.s$`k__Fungi;p__Ascomycota;c__Pezizomycetes;o__Pezizales;f__Pyronemataceae;g__Geopyxis;s__Geopyxis_carbonaria`, env.june.s$logC)
+plot(env.june.s$June.pH,env.june.s$logN)
+plot(env.june.s$logC,env.june.s$logN)
+plot(env.june.s$`June.NH4(mg/kg)dry`,env.june.s$Severity)
+plot(env.june.s$`June.NH4(mg/kg)dry`,env.june.s$logC)
+plot(env.june.s$`June.NO3(mg/kg)dry`,env.june.s$Severity)
+plot(env.june.s$`June.NO3(mg/kg)dry`,env.june.s$logN)
+plot(env.june.s$logNO3,env.june.s$Severity)
+plot(env.june.s$logNH4,env.june.s$Severity)
+plot(env.june.s$logP, env.june.s$June.pH)
+plot(env.june.s$`C/N`,env.june.s$June.pH)
+plot(env.june.s$Al, env.june.s$logN)
+plot(env.june.s$Fe, june.taxa.s$`k__Fungi;p__Ascomycota;c__Dothideomycetes;o__Venturiales;f__Sympoventuriaceae;g__Fusicladium;__`)
+plot(env.june.s$logK, june.taxa.s$`k__Fungi;p__Ascomycota;c__Dothideomycetes;o__Venturiales;f__Sympoventuriaceae;g__Fusicladium;__`)
+
+##log the variables that have outliers 
+env.june.m$logNO3<-log(env.june.m$`June.NO3(mg/kg)dry`+1)
+env.june.m$logC<-log(env.june.m$C)
+env.june.m$logP<-log(env.june.m$P)
+env.june.m$logN<-log(env.june.m$N)
+env.june.m$logB<-log(env.june.m$B)
+env.june.m$logCa<-log(env.june.m$Ca)
+env.june.m$logK<-log(env.june.m$K)
+env.june.m$logMg<-log(env.june.m$Mg)
+env.june.m$logNa<-log(env.june.m$Na)
+env.june.m$logS<-log(env.june.m$S)
+
+#for surface
+env.june.s$logP<-log(env.june.s$P)
+env.june.s$logN<-log(env.june.s$N)
+env.june.s$logC<-log(env.june.s$C)
+env.june.s$logCa<-log(env.june.s$Ca)
+env.june.s$logK<-log(env.june.s$K)
+env.june.s$logMg<-log(env.june.s$Mg)
+env.june.s$logNH4<-log(env.june.s$`June.NH4(mg/kg)dry`+1)
+env.june.s$logNO3<-log(env.june.s$`June.NO3(mg/kg)dry`+1)
+plot(env.june.s$logNH4~env.june.s$June.pH)
+
+
+set.seed(33)
+## exclude variables that have values below the detection limit 
+june.rda.m<-rda(june.taxa.m ~ June.pH+logC+logN+`C/N`+`June.NH4(mg/kg)dry`+logP+Al+logCa+Fe+logK+Mg+Mn+Condition(dist.pcoa$vectors), data= env.june.m)
+lwr.rda.m<-rda(june.taxa.m ~ 1, data= env.june.m)
+step.rda.m<-ordistep(lwr.rda.m, scope = formula(june.rda.m),trace = 0, R2scope=TRUE)
+
+june.rda.s<-rda(june.taxa.s ~ June.pH+logC+logN+`C/N`+logNH4+logNO3+logP+Al+logCa+Fe+logK+logMg+Mn+Condition(dist.pcoa.s$vectors), data= env.june.s)
+lwr.rda.s<-rda(june.taxa.s ~ 1, data= env.june.s)
+step.rda.s<-ordistep(lwr.rda.s, scope = formula(june.rda.s),trace = 0,R2scope=TRUE)
+
+summary(june.rda.m)
+summary(june.rda.s)
+summary(step.rda.s)
+summary(step.rda.m)
+plot(step.rda.m)
+plot(june.rda.m)
+plot(step.rda.s)
+plot(june.rda.s)
+
+#mineral
+colvec<-c("cornflowerblue","lightgoldenrod1","orange1","firebrick3","tomato4","black")
+scl<-3
+plot(step.rda.m,type="n",scaling=scl,xlim=c(-3,3),ylim=c(-2,2))
+text(step.rda.m, display = "bp")
+with(env.june.m, points(step.rda.m, display = "species",col="darkcyan",pch=1,cex=0.5))
+with(env.june.m, points(step.rda.m, display = "sites",col=colvec[Severity],pch=21,bg=colvec[Severity]))
+
+#surface
+colvec<-c("cornflowerblue","lightgoldenrod1","orange1","firebrick3","tomato4","black")
+scl<-3
+
+plot(step.rda.s,type="n",scaling=scl,xlim=c(-2,2),ylim=c(-1,2))
+text(step.rda.s, display = "bp")
+with(env.june.s, points(step.rda.s, display = "species",col="darkcyan",pch=1,cex=0.5))
+with(env.june.s, points(step.rda.s, display = "sites",col=colvec[Severity],pch=21,bg=colvec[Severity]))
+
+
+#view anova results 
+step.rda.m$anova
+summary(step.rda.m)
+step.rda.s$anova
+summary(step.rda.s)
+#test
+anova(step.rda.m,by="terms")
+anova(step.rda.s, by="terms")
+
+
+##or attempt test with <DL with values @ zero
+#logB,Cu,logNa,logS,Zn,
+env.june.m$logB[is.na(env.june.m$logB)]<-0
+env.june.m$Cu[is.na(env.june.m$Cu)]<-0
+env.june.m$logNa[is.na(env.june.m$logNa)]<-0
+env.june.m$logS[is.na(env.june.m$logS)]<-0
+env.june.m$Zn[is.na(env.june.m$Zn)]<-0
+
+env.june.s$Cu[is.na(env.june.s$Cu)]<-0
+env.june.s$Zn[is.na(env.june.s$Zn)]<-0
+env.june.s$Na[is.na(env.june.s$Na)]<-0
+env.june.s$S[is.na(env.june.s$S)]<-0
+env.june.s$B[is.na(env.june.s$B)]<-0
+
+
+#rerun
+set.seed(33)
+## include variables that have values below the detection limit 
+june.rda.m.2<-rda(june.taxa.m ~ June.pH+logC+logN+`C/N`+logP+Al+logB+Cu+logNa+logCa+Fe+logK+Mg+Mn+logS+Zn+Condition(dist.pcoa$vectors), data= env.june.m)
+lwr.rda.m.2<-rda(june.taxa.m ~ 1, data= env.june.m)
+step.rda.m.2<-ordistep(lwr.rda.m.2, scope = formula(june.rda.m.2),trace = 0, R2scope=TRUE)
+
+june.rda.s.2<-rda(june.taxa.s ~ June.pH+logC+logN+`C/N`+logNH4+logNO3+logP+Al+B+Cu+Na+logCa+Fe+logK+logMg+Mn+Zn+Condition(dist.pcoa.s$vectors), data= env.june.s)
+lwr.rda.s.2<-rda(june.taxa.s ~ 1, data= env.june.s)
+step.rda.s.2<-ordistep(lwr.rda.s.2, scope = formula(june.rda.s.2),trace = 0,R2scope=TRUE)
+
+summary(june.rda.m.2)
+summary(june.rda.s.2)
+summary(step.rda.s.2)
+summary(step.rda.m.2)
+plot(step.rda.m.2)
+plot(june.rda.m.2)
+plot(step.rda.s.2)
+plot(june.rda.s.2)
+
+plot(step.rda.m.2,type="n",scaling=scl)
+text(step.rda.m.2, display = "bp")
+with(env.june.m, points(step.rda.m.2, display = "species",col="darkcyan",pch=1,cex=0.5))
+with(env.june.m, points(step.rda.m.2, display = "sites",col=colvec[Severity],pch=21,bg=colvec[Severity]))
+
+
+plot(step.rda.s.2,type="n")
+text(step.rda.s.2, display = "bp")
+with(env.june.s, points(step.rda.s.2, display = "species",col="darkcyan",pch=1,cex=0.5))
+with(env.june.s, points(step.rda.s.2, display = "sites",col=colvec[Severity],pch=21,bg=colvec[Severity]))
+```
+```{r}
+##partial CCA for Sept and Oct to account for spatial autocorrelation----
+##separate physical distance datasets into mineral and organic...
+sd.sept.m<-sample_data(sept.m.phylo.2)
+sd.sept.o<-sample_data(sept.o.phylo.2)
+sd.oct.m<-sample_data(oct.m.phylo.2)
+sd.oct.o<-sample_data(oct.o.phylo.2)
+
+geo.dist.sept.m<-cbind(sd.sept.m$lon,sd.sept.m$lat)
+geo.dist.sept.o<-cbind(sd.sept.o$lon,sd.sept.o$lat)
+geo.dist.oct.m<-cbind(sd.oct.m$lon,sd.oct.m$lat)
+geo.dist.oct.o<-cbind(sd.oct.o$lon,sd.oct.o$lat)
+
+d.geo.sept.m<-distm(geo.dist.sept.m,fun = distHaversine)
+d.geo.sept.o<-distm(geo.dist.sept.o,fun = distHaversine)
+d.geo.oct.m<-distm(geo.dist.oct.m,fun = distHaversine)
+d.geo.oct.o<-distm(geo.dist.oct.o,fun = distHaversine)
+
+sept.m.cca<-cca(psotu2veg(sept.m.phylo.2), env.sept.m,d.geo.sept.m)
+sept.o.cca<-cca(psotu2veg(sept.o.phylo.2), env.sept.o,d.geo.sept.o)
+oct.m.cca<-cca(psotu2veg(oct.m.phylo.2),env.oct.m,d.geo.oct.m)
+oct.o.cca<-cca(psotu2veg(oct.o.phylo.2),env.oct.o,d.geo.oct.o)
+
+```
+
+```{r}
+##perform CCA for june 
+#cnstrained ordination - unimodel distribution of taxa 
+
+##create matrix with the environmental data for mineral only 
+env.june.m<-soil.data.june[c(1:16,33:36),-6]
+env.june.m<-cbind(env.june.m,bulk.soil[,5:18])
+env.june.m$`C/N`<-env.june.m$C/env.june.m$N
+str(env.june.m)
+##create matrix with the environmental data for mineral only   
+env.june.s<-soil.data.june[c(17:32,37:40),-6]
+env.june.s<-cbind(env.june.s,bulk.soil[,1:18])
+env.june.s$`C/N`<-env.june.s$C/env.june.s$N
+
+june.taxa<-psotu2veg(june.phylo.2)
+june.taxa.m<-as.data.frame(june.taxa[c(1:16,33:36),])
+june.taxa.s<-june.taxa[c(17:32,37:40),]
+#full CCA June -----
+
+colnames(env.june.m)
+set.seed(23)
+june.cca.m<-cca(june.taxa.m ~ June.pH+C+N+`C/N`+`June.NO3(mg/kg)dry`+`June.NH4(mg/kg)dry`+P, data= env.june.m)
+june.cca.s<-cca(june.taxa.s ~ June.pH+C+N+`C/N`+`June.NO3(mg/kg)dry`+`June.NH4(mg/kg)dry`+P, data= env.june.s)
+
+autoplot.cca(june.cca.m)
+plot(june.cca.m)
+plot(june.cca.s)
+
+ggord(june.cca.m,env.june.m$Severity)
+ggord(june.cca.s,env.june.s$Severity)
+## test with anova function----
+anova.cca(june.cca)
+
+```
+
+
+```{r}
+
+  
+```
+

@@ -1,0 +1,2372 @@
+---
+title: "pyro.new.analysis.feb13.2023"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+##read in packages
+```{r}
+library(readr)
+library(ggplot2)
+library(vegan)
+library(phyloseq)
+library(tidyr)
+library(car)
+library(lme4)
+library(dplyr)
+library(phylosmith)
+library(stringr)
+library(geosphere)
+library(microbiome)
+library(ANCOMBC)
+library(emmeans)
+library(indicspecies)
+library(reshape2)
+library(patchwork)
+```
+
+
+#read in raw ASV table and taxonomy tables..
+```{r}
+spring.tax<-read_delim("metadata.spring.tsv",delim = "\t")
+fall.tax<-read_delim("metadata.fall.tsv",delim = "\t")
+colnames(spring.tax)<-c("featID","Taxa","Conf")
+colnames(fall.tax)<-c("featID","Taxa","Conf")
+
+spring.asv<-read_delim("spring-features.csv",delim = ";",skip = 1)
+spring.asv<-spring.asv[match(spring.tax$featID,spring.asv$`#OTU ID`),]
+spring.asv.10<-read_delim("spring-features-10.csv",delim = ";",skip = 1) #the .10 suffix means the features with frequency below 10 accross all samples removed...
+fall.asv<-read_delim("fall-features.csv",delim = ";",skip = 1)
+fall.asv<-fall.asv[match(fall.tax$featID,fall.asv$`#OTU ID`),]
+fall.asv.10<-read_delim("fall-features-10.csv",delim = ";",skip = 1)
+
+#make tax files for asv files with low freq ASV removed 
+spring.tax.10<-spring.tax[match(spring.asv.10$`#OTU ID`,spring.tax$featID),]
+fall.tax.10<-fall.tax[match(fall.asv.10$`#OTU ID`,fall.tax$featID),]
+
+#make shared spring and fall ASV table
+length(unique(c(fall.tax.10$featID,spring.tax.10$featID)))# end goal is a file with 4489 sequences
+length(which(is.element(fall.tax.10$featID,spring.tax.10$featID)==FALSE)) ##964 ASVs in fall but not psring... 
+length(which(is.element(spring.tax.10$featID,fall.tax.10$featID)==FALSE)) ##1960 ASVs in spring but not fall...
+#means 1565 of fall and spring shared... which I should merge into one ASV... 
+
+length(unique(c(fall.tax$featID,spring.tax$featID)))# end goal is a file with 7184 sequences
+length(which(is.element(fall.tax$featID,spring.tax$featID)==FALSE)) ##1721 ASVs in fall but not psring... 
+length(which(is.element(spring.tax$featID,fall.tax$featID)==FALSE)) ##3188 ASVs in spring but not fall...
+#means 2275 of fall and spring shared... which I should merge into one ASV... 
+
+which(is.element(spring.tax.10$featID,fall.tax.10$featID)==TRUE)
+
+#Make a df with all of the samples with the shared taxa only - wo 10 ----
+spring.asv.10.m<-spring.asv.10[which(is.element(spring.tax.10$featID,fall.tax.10$featID)==TRUE),]# . m stand for matched
+fall.asv.10.m<-fall.asv.10[which(is.element(fall.tax.10$featID,spring.tax.10$featID)==TRUE),]
+fall.asv.10.um<-fall.asv.10[which(is.element(fall.tax.10$featID,spring.tax.10$featID)==FALSE),] #.um stands for unmatcheed
+spring.asv.10.um<-spring.asv.10[which(is.element(spring.tax.10$featID,fall.tax.10$featID)==FALSE),]
+
+
+spring.asv.10.m<-spring.asv.10.m[match(fall.asv.10.m$`#OTU ID`,spring.asv.10.m$`#OTU ID`),] #make sure the ASVs are in the same order!
+fall.asv.10.m<-fall.asv.10.m[match(fall.asv.10.m$`#OTU ID`,spring.asv.10.m$`#OTU ID`),]
+#fall.asv.10.m$`#OTU ID` == spring.asv.10.m$`#OTU ID`
+
+ 
+asv.10.m<-cbind(spring.asv.10.m,fall.asv.10.m) # OTU ID is col # 1 and 96
+
+asv.10.u<-asv.10.m[1:964,]
+asv.10.u[]<-0 # making black df with same column names 
+fall.asv.10.um<-cbind(fall.asv.10.um[,1],asv.10.u[,2:95],fall.asv.10.um)
+colnames(fall.asv.10.um)<-colnames(asv.10.m)
+asv.10.u<-rbind(asv.10.u,asv.10.u,asv.10.u)
+spring.asv.10.um<-cbind(spring.asv.10.um,asv.10.u[1:1960,96:160])
+
+asv.10.m<-rbind(asv.10.m,fall.asv.10.um,spring.asv.10.um)
+#remove second OTU column
+asv.10.m<-asv.10.m[,-96]
+length(unique(asv.10.m$`#OTU ID`))
+
+#remove samples from fall that were rerun in spring and morel samples
+asv.10<-asv.10.m[,-which(colnames(asv.10.m) %in% c("Morel1","Morel2","Morel3","Morel4","M2A.1","M3A.1","O15C.1"))]
+#128 main + 16 LP + 8 mock and neg = 152 columns
+
+rownames(asv.10)<-asv.10$`#OTU ID`
+ASVsID<-asv.10$`#OTU ID`
+asv.10<-asv.10[,-1]
+
+asv.10[which(asv.10[,colnames(asv.10) == "neg"] > 0),] ## determine which ASVs the negative has reads in
+asv.10[4,]<-asv.10[4,]-2 #remove the same number of reads from every sample
+asv.10[4,]<-ifelse(asv.10[4,]<0,0,as.numeric(asv.10[4,])) #ensure no ASVs had a negative number of reads
+asv.10[49,]<-asv.10[49,]-4 #remove the same number of reads from every sample
+asv.10[49,]<-ifelse(asv.10[49,]<0,0,as.numeric(asv.10[49,])) #ensure no ASVs had a negative number of reads
+asv.10[which(asv.10[,colnames(asv.10) == "neg"] > 0),] ## check that it worked!
+
+#make the matching combined taxonomy set
+tax.10<-rbind(spring.tax.10,fall.tax.10)
+tax.10<-unique(tax.10)
+#make the order match that in the asv table
+tax.10<-tax.10[match(rownames(asv.10),tax.10$featID),]
+
+#Make a df with all of the samples with the shared taxa only - all ----
+spring.asv.m<-spring.asv[which(is.element(spring.tax$featID,fall.tax$featID)==TRUE),]# . m stand for matched
+fall.asv.m<-fall.asv[which(is.element(fall.tax$featID,spring.tax$featID)==TRUE),]
+fall.asv.um<-fall.asv[which(is.element(fall.tax$featID,spring.tax$featID)==FALSE),] #.um stands for unmatcheed
+spring.asv.um<-spring.asv[which(is.element(spring.tax$featID,fall.tax$featID)==FALSE),]
+
+spring.asv.m<-spring.asv.m[match(fall.asv.m$`#OTU ID`,spring.asv.m$`#OTU ID`),] #make sure the ASVs are in the same order!
+fall.asv.m<-fall.asv.m[match(fall.asv.m$`#OTU ID`,spring.asv.m$`#OTU ID`),]
+#fall.asv.m$`#OTU ID` == spring.asv.m$`#OTU ID`
+
+asv.m<-cbind(spring.asv.m,fall.asv.m[,-c(16,22,30,37)]) # OTU ID is col # 1 and 96, remove M1A,M4A,M8A,neg
+
+asv.u<-asv.m[1:1721,]
+asv.u[]<-0 # making black df with same column names 
+fall.asv.um<-cbind(fall.asv.um[,1],asv.u[,2:95],fall.asv.um[,-c(16,22,30,37)])
+asv.u<-rbind(asv.u,asv.u,asv.u)
+spring.asv.um<-cbind(spring.asv.um,asv.u[1:3188,96:160])
+
+asv.m<-rbind(asv.m,fall.asv.um,spring.asv.um)
+#remove second OTU column
+asv.m<-asv.m[,-96]
+length(unique(asv.m$`#OTU ID`))
+
+#remove samples from fall that were rerun in spring and morel samples
+asv<-asv.m[-1,-which(colnames(asv.m) %in% c("Morel1","Morel2","Morel3","Morel4","M2A.1","M3A.1","O15C.1"))]
+#128 main + 16 LP + 8 mock and neg = 152 columns
+
+rownames(asv)<-asv$`#OTU ID`##first row is empty
+ASVsID<-asv$`#OTU ID`
+asv<-asv[,-1]
+
+asv[which(asv[,colnames(asv) == "neg"] > 0),] ## determine which ASVs the negative has reads in
+asv[4,]<-asv[4,]-2 #remove the same number of reads from every sample
+asv[4,]<-ifelse(asv[4,]<0,0,as.numeric(asv[4,])) #ensure no ASVs had a negative number of reads
+asv[50,]<-asv[50,]-4 #remove the same number of reads from every sample
+asv[50,]<-ifelse(asv[50,]<0,0,as.numeric(asv[50,])) #ensure no ASVs had a negative number of reads
+asv[6932,]<-asv[6932,]-2 #remove the same number of reads from every sample
+asv[6932,]<-ifelse(asv[6932,]<0,0,as.numeric(asv[6932,])) #ensure no ASVs had a negative number of reads
+
+asv[which(asv[,colnames(asv) == "neg"] > 0),] ## check that it worked!
+
+#make the matching combined taxonomy set
+tax<-rbind(spring.tax,fall.tax)
+tax<-unique(tax)
+#make the order match that in the asv table
+tax<-tax[match(rownames(asv),tax$featID),]
+```
+
+#create metadata
+```{r}
+spring_species_10 <- read_csv("level-7-spring.csv") ## 94 obs 801 variables 
+samplenames<-spring_species_10$index 
+row.names(spring_species_10)<-samplenames
+
+##seperate out the metadata: sample-type, sample-date, severity
+meta.data.spring<-as.data.frame(spring_species_10[,799:801])
+meta.data.microplots.spring<-meta.data.spring[-which(meta.data.spring$Severity %in% c("mock","morel","neg")),]
+samplenames.microplots<-samplenames[-which(meta.data.spring$Severity %in% c("mock","morel","neg"))]
+rownames(meta.data.microplots.spring)<-samplenames.microplots
+samplenames[38:40]<-c("mock1.1","mock2.1","mock3.1")
+rownames(meta.data.spring)<-samplenames
+meta.data.microplots.spring[rownames(meta.data.microplots.spring) == "O15C",1]<-"surface"
+meta.data.microplots.spring[rownames(meta.data.microplots.spring) == "O15E",1]<-"surface"
+meta.data.microplots.spring[rownames(meta.data.microplots.spring) == "O15G",1]<-"surface"
+meta.data.spring[rownames(meta.data.spring) == "O15C",1]<-"surface"
+meta.data.spring[rownames(meta.data.spring) == "O15E",1]<-"surface"
+meta.data.spring[rownames(meta.data.spring) == "O15G",1]<-"surface"
+
+##reorder severity levels 
+meta.data.microplots.spring$Severity<-ordered(meta.data.microplots.spring$Severity,levels=c("unburnt","surface","medium","med-severe","severe","lp-severe","mock","morel","neg"))
+meta.data.microplots.spring$sample_date<-ordered(meta.data.microplots.spring$sample_date,levels=c("sept","oct","may","june","mock","neg"))
+
+#rename factors 
+meta.data.microplots.spring$Severity <- factor(meta.data.microplots.spring$Severity, labels = c("Unburnt","Low","Medium","Medium-Severe","Severe","LP-Severe"))
+levels(meta.data.microplots.spring$Severity)
+meta.data.microplots.spring$sample_date <- factor(meta.data.microplots.spring$sample_date, labels = c("September","October","May","June"))
+levels(meta.data.microplots.spring$sample_date)
+meta.data.microplots.spring$sample_type<-factor(meta.data.microplots.spring$sample_type,labels = c("Mineral","Surface"))
+levels(meta.data.microplots.spring$sample_type)
+
+##reorder severity levels 
+meta.data.spring$Severity<-ordered(meta.data.spring$Severity,levels=c("unburnt","surface","medium","med-severe","severe","lp-severe","mock","morel","neg"))
+meta.data.spring$sample_date<-ordered(meta.data.spring$sample_date,levels=c("sept","oct","may","june","mock","neg"))
+
+#rename factors 
+meta.data.spring$Severity <- factor(meta.data.spring$Severity, labels = c("Unburnt","Low","Medium","Medium-Severe","Severe","LP-Severe","mock","morel","neg"))
+levels(meta.data.spring$Severity)
+meta.data.spring$sample_date <- if_else(meta.data.spring$sample_date == "sept","September",if_else(meta.data.spring$sample_date == "oct","October",if_else(meta.data.spring$sample_date == "may","May",if_else(meta.data.spring$sample_date == "june","June",as.factor(rownames(meta.data.spring))))))
+meta.data.spring$sample_type<-if_else(meta.data.spring$sample_type == "organic","Surface",if_else(meta.data.spring$sample_type == "mineral","Mineral",as.factor(rownames(meta.data.spring))))
+rownames(meta.data.spring)<-spring_species_10$index
+
+#fall ----
+fall_species_10 <- read_csv("level-7-fall.csv")
+fall_species_10<-fall_species_10[-c(which(fall_species_10$index %in% c("M1A","M2A","M3A","M4A","M8A","O15C"))),] #this is to remove samples which were rerun successfully in the spring
+samplenames.fall<-fall_species_10$index
+rownames(fall_species_10)<-samplenames.fall
+
+#seperate out the metadata: sample-type, sample-date, severity
+meta.data.fall<-as.data.frame(fall_species_10[,c(702,703)])
+meta.data.fall<-separate(meta.data.fall,col="sample-type",into=c("sample_type","sample_date"),sep="-")
+meta.data.microplots.fall<-meta.data.fall[-which(meta.data.fall$severity %in% c("mock")),] 
+colnames(meta.data.fall)<-c("sample_type","sample_date","Severity")
+colnames(meta.data.microplots.fall)<-c("sample_type","sample_date","Severity")
+
+#order
+meta.data.microplots.fall$Severity<-ordered(meta.data.microplots.fall$Severity,levels=c("unburnt","surface","medium","med-severe","severe"))
+meta.data.microplots.fall$sample_date<-ordered(meta.data.microplots.fall$sample_date,levels=c("sept","oct"))
+
+#rename factors 
+meta.data.microplots.fall$Severity <- factor(meta.data.microplots.fall$Severity, labels = c("Unburnt","Low","Medium","Medium-Severe","Severe"))
+levels(meta.data.microplots.fall$Severity)
+meta.data.microplots.fall$sample_date <- factor(meta.data.microplots.fall$sample_date, labels = c("September","October"))
+levels(meta.data.microplots.fall$sample_date)
+meta.data.microplots.fall$sample_type<-factor(meta.data.microplots.fall$sample_type,labels = c("Mineral","Surface"))
+levels(meta.data.microplots.fall$sample_type)
+
+#order
+meta.data.fall$Severity<-ordered(meta.data.fall$Severity,levels=c("unburnt","surface","medium","med-severe","severe","mock"))
+meta.data.fall$sample_date<-ordered(meta.data.fall$sample_date,levels=c("sept","oct"))
+
+#rename factors 
+meta.data.fall$Severity <- factor(meta.data.fall$Severity, labels = c("Unburnt","Low","Medium","Medium-Severe","Severe","mock"))
+levels(meta.data.fall$Severity)
+meta.data.fall$sample_date <- if_else(meta.data.fall$sample_date == "sept","September",if_else(meta.data.fall$sample_date == "oct","October","mock"))
+meta.data.fall$sample_type<-if_else(meta.data.fall$sample_type == "organic","Surface",if_else(meta.data.fall$sample_type == "mineral","Mineral","mock"))
+rownames(meta.data.fall)<-rownames(fall_species_10)
+rownames(meta.data.fall)[rownames(meta.data.fall) %in% c("mock1","mock2","mock3")]<-c("mock1.1","mock2.1","mock3.1")
+```
+
+
+#create phyloseq objects
+```{r}
+#create phyloseq object - wo 10 ----
+phylo.asv.10<-otu_table(asv.10,taxa_are_rows = TRUE)
+taxa_names(phylo.asv.10)<-rownames(asv.10)
+sample_names(phylo.asv.10)<-colnames(asv.10)
+
+#create taxonomy table in OTU format
+tax.ext.10<-separate(tax.10,col= "Taxa",into = c("Kingdom","Phylum","Class","Order","Family","Genus","Species"),sep = ";")
+phylo.tax.10<-tax_table(as(tax.ext.10[,2:8],"matrix"))
+taxa_names(phylo.tax.10)<-rownames(asv.10)
+
+#make sample meta data
+#need common spring and fall metadata
+meta.data<-rbind(meta.data.fall,meta.data.spring)#combine spring and fall
+meta.data<-meta.data[-which(meta.data$sample_type %in% c("Morel1","Morel2","Morel3","Morel4")),]#remove morel samples
+meta.data$sample_name<-rownames(meta.data)
+
+meta.data<-meta.data[match(colnames(asv.10),meta.data$sample_name),]#put in same order as asv table
+
+##add burn status
+# create metadata variable where severe, med-severe, medium, surface all = burnt 
+meta.data$burn.status<-ifelse(meta.data$Severity=="LP-Severe","Burnt",ifelse(meta.data$Severity=="Severe","Burnt",if_else(meta.data$Severity=="Medium-Severe","Burnt",if_else(meta.data$Severity=="Medium","Burnt",if_else(meta.data$Severity=="Low","Burnt",if_else(meta.data$Severity=="Unburnt","Unburnt",NA_character_))))))
+
+meta.data$sample_date<-ordered(meta.data$sample_date, levels=c("September","October","May","June","mock1","mock2","mock3","neg"))
+
+phylo.meta.10<-sample_data(meta.data[,c(1:3,5)])
+sample_names(phylo.meta.10)<-meta.data$sample_name
+
+#now merge species, taxonomy, and metadata
+phylo.10<-phyloseq(phylo.asv.10,phylo.tax.10,phylo.meta.10)
+phylo.10<-subset_samples(phylo.10, Severity != "neg")#remove neg
+phylo.10
+
+#create phyloseq object -all ----
+phylo.asv<-otu_table(asv,taxa_are_rows = TRUE)
+taxa_names(phylo.asv)<-tax$featID
+sample_names(phylo.asv)<-colnames(asv)
+
+#create taxonomy table in OTU format
+tax.ext<-separate(tax,col= "Taxa",into = c("Kingdom","Phylum","Class","Order","Family","Genus","Species"),sep = ";")
+phylo.tax<-tax_table(as(tax.ext[,2:8],"matrix"))
+taxa_names(phylo.tax)<-tax.ext$featID
+
+#make sample meta data
+#need common spring and fall metadata
+meta.data<-meta.data[match(colnames(asv),meta.data$sample_name),]#put in same order as asv table
+
+phylo.meta<-sample_data(meta.data[,c(1:3,5)])
+sample_names(phylo.meta)<-meta.data$sample_name
+
+#now merge species, taxonomy, and metadata
+phylo<-phyloseq(phylo.asv,phylo.tax,phylo.meta)
+phylo<-subset_samples(phylo, Severity != "neg")#remove neg
+phylo
+
+#make a table in proper format for funguild
+#master.otu<-otu_table(phylo)
+#master.otu<-as.data.frame(master.otu)
+#master.otu$OTU_ID<-row.names(master.otu)
+#master.otu<-master.otu[,c(ncol(master.otu),1:(ncol(master.otu)-1))]
+#master.otu$taxonomy<-tax$Taxa
+#write_delim(master.otu,"master.otu.funguildformat.feb16.2023.txt",delim="\t")
+
+```
+
+#phyloseq wo mock
+```{r}
+#mock community
+#create subset with only mock then merge spring and fall 
+mock.com<-subset_samples(phylo,Severity =="mock")
+
+summary(colSums(otu_table(mock.com)))
+
+##create relative abundance data
+taxa.15.mock <- prune_taxa(names(sort(taxa_sums(mock.com),TRUE)[1:15]), mock.com) #prune to only the top 15 most abundant taxa
+phylo.rel.abundance.mock<-transform_sample_counts(taxa.15.mock,function(x){x/sum(x)})#convert to relative abundance
+
+## can play around with "x=" to see different groupings or with "fill=" to see different taxonomic levels 
+plot_bar(phylo.rel.abundance.mock,fill = "Genus")+geom_bar(aes(color = Genus, fill = Genus), stat = "identity", position = "stack") +
+  labs( y = "Relative Abundance\n")+
+  theme(panel.background = element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank())
+
+#get proportions
+gen.propor.mock<-taxa_proportions(mock.com,"Genus",treatment = "sample")
+spe.propor.mock<-taxa_proportions(mock.com,"Species",treatment = "sample")
+gen.propor.mock<-dplyr::filter(gen.propor.mock, gen.propor.mock$Proportion > 0)
+spe.propor.mock<-dplyr::filter(spe.propor.mock, spe.propor.mock$Proportion > 0)
+
+mean.russ<-dplyr::filter(gen.propor.mock, gen.propor.mock$Genus == 'g__Russula')#create subset of only russla
+mean.russ<-mean.russ[c(1,2,4,6),]
+mean(mean.russ$Proportion)
+sd(mean.russ$Proportion)
+
+mean.ceno<-dplyr::filter(gen.propor.mock, gen.propor.mock$Genus == 'g__Cenococcum')
+mean.ceno<-mean.ceno[c(1,2,4,6),]
+mean(mean.ceno$Proportion)
+sd(mean.ceno$Proportion)
+
+mean.tome<-dplyr::filter(gen.propor.mock, gen.propor.mock$Genus == 'g__Tomentella')
+mean.tome<-mean.tome[c(1,2,4,6),]
+mean(mean.tome$Proportion)
+sd(mean.tome$Proportion)
+
+mean.spha<-dplyr::filter(gen.propor.mock, gen.propor.mock$Genus == 'g__Sphaerosporella')
+mean.spha<-mean.spha[c(1,2,4,6),]
+mean(mean.spha$Proportion)
+sd(mean.spha$Proportion)
+
+mean.wmik<-dplyr::filter(spe.propor.mock, spe.propor.mock$Species == 's__Wilcoxina_mikolae')
+mean.wmik<-mean.wmik[c(1,2,4,6),]
+mean(mean.wmik$Proportion)
+sd(mean.wmik$Proportion)
+
+mean.wreh<-dplyr::filter(spe.propor.mock, spe.propor.mock$Species == 's__Wilcoxina_rehmii')
+mean.wreh<-mean.wreh[c(1,2,4,6),]
+mean(mean.wreh$Proportion)
+sd(mean.wreh$Proportion)
+
+#pustularia - only identified to family therefore cannot seperate out from genus aggreated data
+#taxa_names(mock.com)
+pust.abun<-get_sample(mock.com, "CGCACATTGCGCCTTCCGGTATTCCGGGAGGCATGCCTGTCCGAGCGTCATCAAAAACCACTCAAGTAGTTTTGCTTGGTCATGAAAGAAGAGTTTGCTTGCGGATTCCCTTTCGAAATTCAATGGCAGAGAGTCTCGTGATTCCGGCGTAGTAATAACTTATTCGCTTGGTCATTGTAACAATCTTGCCCCAAACCCCCAATTCTAGTGTTTGACCTCGGATCAGGTAGGGATACCCGCTGAACTTAA")
+propor.pust<-pust.abun/colSums(otu_table(mock.com))# convert to realtive abundance 
+propor.pust<-propor.pust[c(-2,-3)]
+mean(propor.pust)
+sd(propor.pust)
+
+mean.mock<-as.numeric(c(mean(mean.wreh$Proportion),mean(mean.wmik$Proportion),mean(mean.spha$Proportion),mean(mean.tome$Proportion),mean(mean.ceno$Proportion),mean(mean.russ$Proportion),mean(propor.pust),0.04))
+names<-c("Wilcoxina rehmii","Wilcoxina mikolae","Sphaerosporella brunnea","Tomentella bryophila", "Cenococcum geophilum","Russula olivobrunnea","Pustularia sp.","False Positives")
+se<-as.numeric(c(sd(mean.wreh$Proportion),sd(mean.wmik$Proportion),sd(mean.spha$Proportion),sd(mean.tome$Proportion),sd(mean.ceno$Proportion),sd(mean.russ$Proportion),sd(propor.pust),0))
+type<-rep("mock",8)
+mean.mock<-data.frame(mean.mock,se,names,type)
+mean.mock$names<-factor(mean.mock$names, levels = c("Cenococcum geophilum", "Pustularia sp.","Russula olivobrunnea", "Sphaerosporella brunnea","Tomentella bryophila","Wilcoxina mikolae","Wilcoxina rehmii", "False Positives" ),ordered = TRUE)
+str(mean.mock)
+summary(mean.mock)
+
+
+##determining the proportion of everything else present
+1-(mean(mean.wreh$Proportion)+mean(mean.wmik$Proportion)+mean(mean.spha$Proportion)+mean(mean.tome$Proportion)+mean(mean.ceno$Proportion)+mean(mean.russ$Proportion)+mean(propor.pust))
+#4%
+
+ggplot(mean.mock,aes(fill=names,y=mean.mock,x=type))+geom_col(position="stack",width = 2)+labs(x="",y="Proportion of reads")+scale_color_manual(aesthetics = "fill", values = c("lawngreen","sienna3","darkolivegreen","peru","cornflowerblue","pink2","pink4","gold"),name = "Taxon")
+ggsave("mock.rel.abun.feb22.tiff",dpi = 1000,height = 9000,units = "px")
+```
+
+##relative abundance plotting 
+```{r}
+
+##create relative abundance data
+phylo.rel.abundance<-transform_sample_counts(phylo,function(x){x/sum(x)})
+plot_bar(phylo.rel.abundance,fill = "ta6")
+
+# can prune taxa to view better 
+taxa.100 <- prune_taxa(names(sort(taxa_sums(phylo),TRUE)[1:100]), phylo)
+taxa.50 <- prune_taxa(names(sort(taxa_sums(phylo),TRUE)[1:50]), phylo)
+
+## can play around with "x=" to see different groupings or with "fill=" to see different taxonomic levels 
+phylo.rel.abundance<-transform_sample_counts(taxa.50,function(x){x/sum(x)})
+plot_bar(phylo.rel.abundance,fill = "ta6")+geom_bar(aes(color = ta6, fill = ta6), stat = "identity", position = "stack") +
+  labs( y = "Relative Abundance\n") + facet_wrap(~ Severity, scales = "free")+
+  theme(panel.background = element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank())
+
+```
+
+#remove mock and neg
+```{r}
+#remove mock and neg
+phylo<-subset_samples(phylo,Severity !="mock" & Severity !="neg")
+phylo.10<-subset_samples(phylo.10,Severity !="mock" & Severity !="neg")
+#without LP-Severe
+phylo.wolp<-subset_samples(phylo,Severity != "LP-Severe")
+phylo.wolp.10<-subset_samples(phylo.10,Severity != "LP-Severe")
+
+```
+
+#sequence data stats
+```{r}
+#total number of sequences out of bioinformatics pipeline
+sum(otu_table(phylo))#5928020
+phylo
+
+#mean and range of reads
+count.asvs<-otu_table(phylo)
+summary(colSums(count.asvs)) #37666 reads per sample 
+sd(colSums(count.asvs)) #27226.04 SD
+
+#mean and range of asvs
+class(count.asvs)<-NULL
+count.asvs[count.asvs > 0] <- 1
+summary(colSums(count.asvs)) #189
+sd(colSums(count.asvs)) #111.78 SD
+
+#number of each taxonmic level
+get_taxa_unique(phylo,"Phylum")
+length(get_taxa_unique(phylo,"Class"))
+length(get_taxa_unique(phylo,"Order"))
+length(get_taxa_unique(phylo,"Family"))
+length(get_taxa_unique(phylo,"Genus"))
+length(get_taxa_unique(phylo,"Species"))
+
+# Create a factor corresponding to the Genera
+genfac = factor(tax_table(phylo)[, "Genus"])
+# Tabulate the counts for each genera in each sample
+gentab = apply(otu_table(phylo), MARGIN = 2, function(x) {
+    tapply(x, INDEX = genfac, FUN = sum, na.rm = TRUE, simplify = TRUE)
+})
+head(gentab)[, 1:10]
+
+#write.csv(tax_table(phylo), "tax.table.sept7.2021.csv")
+
+#most abundant by reads total
+count.reads<-otu_table(phylo)
+which(rowSums(count.reads) == max(rowSums(count.reads)))
+pyro.abun<-get_sample(phylo, "CGCACATTGCGCCTCCTGGTATTCCGGGAGGCATGCCTGTTCGAGCGTCATTAAAACCTCCTCAAGCTCTTTTGCTTGGTATTGGAAGAAGAGGCCGCTTGTCGGTCTCCCTTTCGAAATGCAATGGCAGATTGCCTCATGTGCCCTGGCGTAATAAGATTTATCTTTCGCTTGTGCATTGGGATGATCCCGCCGCAAACCCCCAATTTTTTCTGGTTGACCTCGGATCAGGTAGGGATACCCGCTGAACTTAA")
+sum(pyro.abun)/sum(otu_table(phylo))
+#15% of all reads 
+pyro.abun<-cbind(pyro.abun,sample_data(phylo))
+sum(pyro.abun[which(pyro.abun$Severity == "Unburnt"),]$pyro.abun)/sum(pyro.abun$pyro.abun)
+pyro.o.abun<-get_sample(phylo, "CGCACATTGCGCCTCCTGGTATTCCGGGAGGCATGCCTGTTCGAGCGTCATTAAAACCTCCTCAAGCTCTTTTGCTTGGTATTGGAAGAAGAGGCCGCTTGTCGGTCTCCCTTTCGAAATGCAATGGCAGATTGCCTCATGTGCCCTGGCGTAATAAGATTTATCTTTCGCTTGTGCATTGAGACGATCCCGCCGCAAACCCCCAATTTTTTCTGGTTGACCTCGGATCAGGTAGGGATACCCGCTGAACTTAA")
+sum(pyro.o.abun)/sum(otu_table(phylo))
+#1.2% of all reads - this is pyronema omphalodes
+
+#most present across all samples 
+count.reads[count.reads>0]<-1# convert to presence absence data 
+which(rowSums(count.reads) == max(rowSums(count.reads))) # identify which is the highest
+max(rowSums(count.reads))
+
+
+
+#check which taxa are unique to each month or type etc
+#first create phylo object with no zero taxa --- for only the burnt microplots!
+phylo.sept<-subset_samples(phylo.wolp, sample_date == "September")
+phylo.sept
+alltaxa.sept<-otu_table(phylo.sept)
+goodtaxa.sept<-alltaxa.sept[-which(rowSums(otu_table(phylo.sept)) == 0),]
+goodtaxa.sept<-otu_table(goodtaxa.sept,taxa_are_rows = TRUE)
+taxa.good.sept<-as.data.frame(rownames(goodtaxa.sept))
+colnames(taxa.good.sept)<-"full.taxa"
+taxa.good.sept<-separate(taxa.good.sept,col= "full.taxa",into = c("Kingdom","Phylum","Class","Order","Family","Genus","Species"),sep = ";")
+good.taxonomy.sept<-tax_table(taxa.good.sept)
+taxa_names(good.taxonomy.sept)<-rownames(goodtaxa.sept)
+sd.sept<-sample_data(phylo.sept)
+phylo.sept<-merge_phyloseq(sd.sept,goodtaxa.sept,good.taxonomy.sept)
+phylo.sept
+
+#oct
+phylo.oct<-subset_samples(phylo.wolp, sample_date == "October")
+phylo.oct
+alltaxa.oct<-otu_table(phylo.oct)
+goodtaxa.oct<-alltaxa.oct[-which(rowSums(otu_table(phylo.oct)) == 0),]
+goodtaxa.oct<-otu_table(goodtaxa.oct,taxa_are_rows = TRUE)
+taxa.good.oct<-as.data.frame(rownames(goodtaxa.oct))
+colnames(taxa.good.oct)<-"full.taxa"
+taxa.good.oct<-separate(taxa.good.oct,col= "full.taxa",into = c("Kingdom","Phylum","Class","Order","Family","Genus","Species"),sep = ";")
+good.taxonomy.oct<-tax_table(taxa.good.oct)
+taxa_names(good.taxonomy.oct)<-rownames(goodtaxa.oct)
+sd.oct<-sample_data(phylo.oct)
+phylo.oct<-merge_phyloseq(sd.oct,goodtaxa.oct,good.taxonomy.oct)
+phylo.oct
+
+#may
+phylo.may<-subset_samples(phylo.wolp, sample_date == "May")
+phylo.may
+alltaxa.may<-otu_table(phylo.may)
+goodtaxa.may<-alltaxa.may[-which(rowSums(otu_table(phylo.may)) == 0),]
+goodtaxa.may<-otu_table(goodtaxa.may,taxa_are_rows = TRUE)
+taxa.good.may<-as.data.frame(rownames(goodtaxa.may))
+colnames(taxa.good.may)<-"full.taxa"
+taxa.good.may<-separate(taxa.good.may,col= "full.taxa",into = c("Kingdom","Phylum","Class","Order","Family","Genus","Species"),sep = ";")
+good.taxonomy.may<-tax_table(taxa.good.may)
+taxa_names(good.taxonomy.may)<-rownames(goodtaxa.may)
+sd.may<-sample_data(phylo.may)
+phylo.may<-merge_phyloseq(sd.may,goodtaxa.may,good.taxonomy.may)
+phylo.may
+
+#june
+phylo.june<-subset_samples(phylo.wolp, sample_date == "June")
+phylo.june
+alltaxa.june<-otu_table(phylo.june)
+goodtaxa.june<-alltaxa.june[-which(rowSums(otu_table(phylo.june)) == 0),]
+goodtaxa.june<-otu_table(goodtaxa.june,taxa_are_rows = TRUE)
+taxa.good.june<-as.data.frame(rownames(goodtaxa.june))
+colnames(taxa.good.june)<-"full.taxa"
+taxa.good.june<-separate(taxa.good.june,col= "full.taxa",into = c("Kingdom","Phylum","Class","Order","Family","Genus","Species"),sep = ";")
+good.taxonomy.june<-tax_table(taxa.good.june)
+taxa_names(good.taxonomy.june)<-rownames(goodtaxa.june)
+sd.june<-sample_data(phylo.june)
+phylo.june<-merge_phyloseq(sd.june,goodtaxa.june,good.taxonomy.june)
+phylo.june
+
+#mean and range of reads and SHs by sequencing round
+count.asvs.may<-otu_table(phylo.may)
+count.asvs.may[count.asvs.may>0]<-1
+summary(colSums(count.asvs.may)) 
+sd(colSums(count.asvs.may)) 
+count.asvs.june<-otu_table(phylo.june)
+count.asvs.june[count.asvs.june>0]<-1
+summary(colSums(count.asvs.june)) 
+sd(colSums(count.asvs.june))
+count.asvs.oct<-otu_table(phylo.oct)
+count.asvs.oct[count.asvs.oct>0]<-1
+summary(colSums(count.asvs.oct)) 
+sd(colSums(count.asvs.oct)) 
+count.asvs.sept<-otu_table(phylo.sept)
+count.asvs.sept[count.asvs.sept>0]<-1
+summary(colSums(count.asvs.sept))  
+sd(colSums(count.asvs.sept))
+
+#how many reads per sample average across burnt or unburnt samples 
+count.asvs.may<-otu_table(subset_samples(phylo.may, burn.status == "Burnt"))
+count.asvs.may[count.asvs.may>0]<-1
+summary(colSums(count.asvs.may))
+sd(colSums(count.asvs.may))
+count.asvs.june<-otu_table(subset_samples(phylo.june, burn.status == "Burnt"))
+count.asvs.june[count.asvs.june>0]<-1
+summary(colSums(count.asvs.june))
+sd(colSums(count.asvs.june))
+count.asvs.oct<-otu_table(subset_samples(phylo.oct, burn.status == "Burnt"))
+count.asvs.oct[count.asvs.oct>0]<-1
+summary(colSums(count.asvs.oct))
+sd(colSums(count.asvs.oct))
+count.asvs.sept<-otu_table(subset_samples(phylo.sept, burn.status == "Burnt"))
+count.asvs.sept[count.asvs.sept>0]<-1
+summary(colSums(count.asvs.sept)) 
+sd(colSums(count.asvs.sept)) 
+
+
+count.asvs.sept.m.ms.s<-otu_table(subset_samples(phylo.sept, Severity != "Low")) ##only the highest severty levels 
+count.asvs.sept.m.ms.s[count.asvs.sept.m.ms.s>0]<-1
+summary(colSums(count.asvs.sept.m.ms.s)) 
+sd(colSums(count.asvs.sept.m.ms.s)) 
+count.asvs.oct.m.ms.s<-otu_table(subset_samples(phylo.oct, Severity != "Low")) ##only the highest severty levels 
+count.asvs.oct.m.ms.s[count.asvs.oct.m.ms.s>0]<-1
+summary(colSums(count.asvs.oct.m.ms.s)) 
+sd(colSums(count.asvs.oct.m.ms.s)) 
+
+count.asvs.may<-otu_table(subset_samples(phylo.may, burn.status == "Unburnt"))
+count.asvs.may[count.asvs.may>0]<-1
+summary(colSums(count.asvs.may)) 
+sd(colSums(count.asvs.may)) 
+count.asvs.june<-otu_table(subset_samples(phylo.june, burn.status == "Unburnt"))
+count.asvs.june[count.asvs.june>0]<-1
+summary(colSums(count.asvs.june)) 
+sd(colSums(count.asvs.june))
+count.asvs.oct<-otu_table(subset_samples(phylo.oct, burn.status == "Unburnt"))
+count.asvs.oct[count.asvs.oct>0]<-1
+summary(colSums(count.asvs.oct))  
+sd(colSums(count.asvs.oct)) 
+count.asvs.sept<-otu_table(subset_samples(phylo.sept, burn.status == "Unburnt"))
+count.asvs.sept[count.asvs.sept>0]<-1
+summary(colSums(count.asvs.sept)) 
+sd(colSums(count.asvs.sept)) 
+
+#now can check for uniques in the taxa tables
+
+so.diff<-setdiff(taxa_names(phylo.sept),taxa_names(phylo.oct))
+os.diff<-setdiff(taxa_names(phylo.oct),taxa_names(phylo.sept))
+so.diff## all in september but not oct
+
+os.diff ## all in oct but not sept
+
+is.element(so.diff,taxa_names(phylo.sept)) 
+som.diff<-setdiff(so.diff,taxa_names(phylo.may))
+som.diff ## all in spt but not oct or may 
+
+is.element(som.diff,taxa_names(phylo.sept))  
+somj.diff<-setdiff(som.diff,taxa_names(phylo.june))
+somj.diff
+
+#confirmation 
+is.element(somj.diff,taxa_names(phylo.may))
+is.element(somj.diff,taxa_names(phylo.oct))
+is.element(somj.diff,taxa_names(phylo.june))
+is.element(somj.diff,taxa_names(phylo.sept))
+
+
+om.diff<-setdiff(taxa_names(phylo.oct),taxa_names(phylo.may))
+om.diff
+
+omj.diff<-setdiff(om.diff,taxa_names(phylo.june))
+omj.diff
+
+
+fall.unique<-c(somj.diff,omj.diff)
+
+#check proportions of taxa at different taxonomic levels per sample
+fam.propor<-taxa_proportions(phylo,"ta5",treatment = "sample")
+fam.propor<-dplyr::filter(fam.propor, fam.propor$Proportion > 0)
+
+gen.propor<-taxa_proportions(phylo,"ta6",treatment = "sample")
+gen.propor.pres<-dplyr::filter(gen.propor, gen.propor$Proportion > 0) #only samples where it is present
+
+burnt.phylo<-subset_samples(phylo, Severity != "Unburnt")
+gen.propor.burnt<-taxa_proportions(burnt.phylo,"ta6",treatment = "sample")
+gen.propor.burnt.pres<-dplyr::filter(gen.propor.burnt, gen.propor.burnt$Proportion > 0)
+
+
+```
+
+
+#reads per sample accross treatments 
+```{r}
+sampling.depth<-cbind(colSums(otu_table(phylo.wolp)),sample_data(phylo.wolp))
+colnames(sampling.depth)<- c("totalreads","sample_type","sample_date","Severity","Burn.status")
+sampling.depth$Burn.status<-as.factor(sampling.depth$Burn.status)
+sampling.depth$sample_type<-as.factor(sampling.depth$sample_type)
+sampling.depth$sample_date<-as.factor(sampling.depth$sample_date)
+
+tiff("sampling.depth.tiff",res = 1000,height = 9000,width = 6000)
+par(mfrow=c(3,1))
+plot(sampling.depth$totalreads~sampling.depth$Severity,xlab="Severity",ylab = "Total reads per sample")
+mtext(adj=0,side=3,"A",cex=1.5,line = 2)
+plot(sampling.depth$totalreads~sampling.depth$sample_date,xlab="Sample date",ylab = "Total reads per sample")
+mtext(adj=0,side=3,"B",cex=1.5,line = 2)
+plot(sampling.depth$totalreads~sampling.depth$sample_type,xlab="Sample layer",ylab = "Total reads per sample")
+mtext(adj=0,side=3,"C",cex=1.5,line = 2)
+dev.off()
+
+plot(sampling.depth$totalreads~sampling.depth$Burn.status)
+
+sample.dep.sev<-lm(totalreads~Severity,data=sampling.depth)
+anova(sample.dep.sev) #not sig
+sample.dep.date<-lm(totalreads~sample_date,data=sampling.depth)
+anova(sample.dep.date) #not sig
+sample.dep.type<-lm(totalreads~sample_type,data=sampling.depth)
+anova(sample.dep.type) # notsig
+
+mean(sampling.depth[sampling.depth$sample_date == "October",]$totalreads)
+min(sampling.depth[sampling.depth$sample_date == "October",]$totalreads)
+min(sampling.depth[sampling.depth$sample_date == "May",]$totalreads)
+min(sampling.depth[sampling.depth$sample_date == "June",]$totalreads)
+min(sampling.depth[sampling.depth$sample_date == "September",]$totalreads)
+mean(sampling.depth[sampling.depth$sample_date == "September",]$totalreads)
+
+sampling.depth.10<-cbind(colSums(otu_table(phylo.10)),sample_data(phylo.10))
+colnames(sampling.depth.10)<- c("totalreads","sample_type","sample_date","Severity")
+sampling.depth.10$sample_type<-as.factor(sampling.depth.10$sample_type)
+sampling.depth.10$sample_date<-as.factor(sampling.depth.10$sample_date)
+plot(sampling.depth$totalreads~sampling.depth$Severity)
+plot(sampling.depth$totalreads~sampling.depth$sample_date)
+plot(sampling.depth$totalreads~sampling.depth$sample_type)
+plot(sampling.depth$totalreads~sampling.depth$Burn.status)
+
+sample.dep.sev.10<-lm(totalreads~Severity,data=sampling.depth.10)
+anova(sample.dep.sev.10) #not sig
+sample.dep.date.10<-lm(totalreads~sample_date,data=sampling.depth.10)
+anova(sample.dep.date.10) #not sig
+sample.dep.type.10<-lm(totalreads~sample_type,data=sampling.depth.10)
+anova(sample.dep.type.10) #sig
+
+```
+
+
+## use phyloseq to do shannon and simpson indices
+```{r}
+a.div.measures<-estimate_richness(phylo.wolp, measures = c("Shannon","Simpson")) #get the measures of shannon and simpson 
+#a.div.measures.10<-estimate_richness(phylo.wolp.10, measures = c("Shannon","Simpson")) #get the measures of shannon and simpson 
+
+plot(a.div.measures$Shannon,a.div.measures$Simpson) # visualize their realtionship to one another
+
+#bind shannon and simpsom to meta data
+meta.data.microplots<-sample_data(phylo.wolp)
+meta.data.microplots.10<-sample_data(phylo.wolp.10)
+meta.data.microplots
+meta.data.microplots<-cbind(meta.data.microplots,a.div.measures)
+meta.data.microplots.10<-cbind(meta.data.microplots.10,a.div.measures.10)
+
+#add sequencing depth 
+meta.data.microplots$sample_depth<-sampling.depth$totalreads
+#meta.data.microplots.10$sample_depth<-sampling.depth.10$totalreads
+
+plot(meta.data.microplots$Shannon,meta.data.microplots$sample_depth)
+
+##plot against severity
+ggplot(meta.data.microplots, aes(x = Severity, y = Shannon,color=sample_date,shape=sample_type)) +
+     geom_jitter(position= position_dodge(0.6),size=2,stroke=2)+scale_shape_manual(values=c(1, 2))+
+    labs(x = "Severity", y = "Shannon-Wiener Diversity Index") + 
+    theme_classic()+scale_color_manual(values = c("sienna2","sienna4","mediumaquamarine","blue4"))
+
+ggplot(meta.data.microplots.10, aes(x = Severity, y = Shannon,color=sample_date,shape=sample_type)) +
+     geom_jitter(position= position_dodge(0.6),size=2,stroke=2)+scale_shape_manual(values=c(1, 2))+
+    labs(x = "Severity", y = "Shannon-Wiener Diversity Index") + 
+    theme_classic()+scale_color_manual(values = c("sienna2","sienna4","mediumaquamarine","blue4"))
+
+#subplot shan -date
+pointshape<-c(rep(16,5),rep(17,5))
+
+ggplot(meta.data.microplots) + #create base plot
+  geom_point(aes(x = Severity, y = Shannon,color=sample_date,shape=sample_type),position=position_dodge(0.6),size=1,stroke=0.55)+ #add points
+  labs(x = "Severity", y = "Shannon-Wiener Diversity Index",) + #add axis labels
+  scale_color_manual(values = c("sienna2","sienna4","mediumaquamarine","blue4"))+ #manually colour points
+  scale_shape_manual(values = c(1,2))+ #manually provide open point shapes
+  theme_classic()+
+  theme(legend.position = "right",legend.key.size = unit(0.5,'cm'),legend.text = element_text(size = 7),legend.title = element_blank(),axis.text = element_text(size = 7),axis.title = element_text(size = 7))+ #place axis on the right hand side
+  stat_summary_bin(data= meta.data.microplots ,aes(x = Severity, y = Shannon,color=sample_date,group=sample_date,shape=sample_type),fun.data="mean_se",fun.args = list(mult=1), geom="errorbar",width=0.08, position = position_dodge(0.6),size=0.25)+ #add the se of the mean 
+  stat_summary_bin(data= meta.data.microplots ,aes(x = Severity, y = Shannon,color=sample_date,group=sample_date,shape=sample_type),fun ="mean",geom = "point", position = position_dodge(0.6),size=1,shape=8)+ # add the mean points 
+ stat_summary_bin(data= meta.data.microplots ,aes(x = Severity, y = Shannon,shape=sample_type,group=sample_type,color=sample_date),fun.data="mean_se",fun.args = list(mult=1), geom="linerange",width=0.08, position = position_nudge(0.4),size=0.25)+
+  stat_summary_bin(data= meta.data.microplots ,aes(x = Severity, y = Shannon,shape=sample_type,group=sample_type),shape=pointshape,fun ="mean",geom = "point", position = position_nudge(0.4),size=2)+annotate("text",x=1,y=5.4,label="a",size=3)+annotate("text",x=1,y=5.2,label="a",size=3)+annotate("text",x=2,y=5.4,label="ab",size=3)+annotate("text",x=2,y=5.2,label="a",size=3)+annotate("text",x=3,y=5.4,label="b",size=3)+annotate("text",x=3,y=5.2,label="a",size=3)+annotate("text",x=4,y=5.4,label="b",size=3)+annotate("text",x=4,y=5.2,label="a",size=3)+annotate("text",x=5,y=5.4,label="b",size=3)+annotate("text",x=5,y=5.2,label="a",size=3)+annotate("text",x=1.5,y=4.0,label="*",size=3,colour="red")+
+  annotate("text",x=6,y=5.4,label="Surface",size=3)+
+  annotate("text",x=6,y=5.2,label="Mineral",size=3)+
+  coord_cartesian(clip = "off")
+ggsave("Shannon.alpha.div.mar22.2023.tiff",units = "px",width = 5512,height = 3500,dpi = 1000,compression ="lwz")
+
+
+#simpson
+ggplot(meta.data.microplots, aes(x = Severity, y = Simpson, color=sample_date, shape=sample_type))+ geom_jitter(position=position_dodge(0.6), size = 2,stroke=2)+scale_shape_manual(values=c(1, 2)) +
+    labs(x = "Severity", y = "Simpson Diversity Index") + 
+    theme_classic()+scale_color_manual(values = c("sienna2","sienna4","mediumaquamarine","blue4"))
+
+```
+
+##test asumptions with all sample dates combined 
+```{r}
+
+#meta.data.microplots$shan.sqrt<-sqrt(meta.data.microplots$Shannon)
+meta.data.microplots$shan.sq<-meta.data.microplots$Shannon*meta.data.microplots$Shannon
+#meta.data.microplots$simp.sq<-meta.data.microplots$Simpson*meta.data.microplots$Simpson
+#meta.data.microplots$simp.log<-log(meta.data.microplots$Simpson)
+#meta.data.microplots$simp.logit<-logit(meta.data.microplots$Simpson)
+#meta.data.microplots$simp.exp<-exp(meta.data.microplots$Simpson)
+meta.data.microplots$simp.quad<-meta.data.microplots$Simpson^4
+
+##try including sample type as factor
+#test heteroscadasity
+leveneTest(Simpson~Severity, data=meta.data.microplots)
+leveneTest(Shannon~Severity, data=meta.data.microplots)
+leveneTest(Simpson~sample_date, data=meta.data.microplots)
+leveneTest(Shannon~sample_date, data=meta.data.microplots)
+leveneTest(Simpson~sample_type, data=meta.data.microplots)
+leveneTest(Shannon~sample_type, data=meta.data.microplots)
+ 
+
+
+shan<-lm(shan.sq~Severity*sample_date*sample_type, data=meta.data.microplots)
+simp<-lm(simp.quad~Severity*sample_date*sample_type, data=meta.data.microplots)
+plot(shan)
+plot(simp)
+
+#check for outliers
+outlierTest(shan)
+outlierTest(simp)
+
+hist(meta.data.microplots$simp.quad)  
+hist(meta.data.microplots$shan.sq)
+
+
+shan<-ggplot(data = meta.data.microplots, aes(sample = shan.sq)) +
+  stat_qq(shape = 1, size = 2) +
+  stat_qq_line()+
+  theme_bw()
+x.pnts.shan <- ggplot_build(shan)$data[[1]]$x
+y.pnts.shan <- ggplot_build(shan)$data[[1]]$y
+offset <- (max(y.pnts.shan) - min(y.pnts.shan)) / 20
+shan +
+    geom_text(label = rownames(meta.data.microplots),
+              x = x.pnts.shan,
+              y = y.pnts.shan + offset)
+
+
+simp<-ggplot(data = meta.data.microplots, aes(sample = simp.quad)) +
+  stat_qq(shape = 1, size = 2) +
+  stat_qq_line()+
+  theme_bw()
+x.pnts.simp <- ggplot_build(simp)$data[[1]]$x
+y.pnts.simp <- ggplot_build(simp)$data[[1]]$y
+offset <- (max(y.pnts.simp) - min(y.pnts.simp)) / 20
+simp +
+    geom_text(label = rownames(meta.data.microplots),
+              x = x.pnts.simp,
+              y = y.pnts.simp + offset)
+
+
+##try including sample type as factor
+#test heteroscadasity
+leveneTest(shan.sq~Severity, data=meta.data.microplots)
+leveneTest(shan.sq~sample_date, data=meta.data.microplots)
+leveneTest(shan.sq~sample_type, data=meta.data.microplots)
+
+
+##try including sample type as factor
+#test heteroscadasity
+leveneTest(simp.quad~Severity, data=meta.data.microplots)
+leveneTest(simp.quad~sample_date, data=meta.data.microplots)
+leveneTest(simp.quad~sample_type, data=meta.data.microplots)
+```
+
+
+
+##test alpha div using anova 
+```{r}
+##check relationship between the sequencing depth and the diersity metrics... 
+summary(lm(simp.quad~sample_depth,data = meta.data.microplots))
+summary(lm(shan.sq~sample_depth,data = meta.data.microplots))
+
+#with normalizations
+shan.lm.sq<-lm(shan.sq~Severity*sample_date*sample_type, data=meta.data.microplots)
+simp.lm.quad<-lm(simp.quad~Severity*sample_date*sample_type, data=meta.data.microplots)
+
+#test
+summary(shan.lm)
+summary(simp.quad)
+anova(shan.lm.sq)
+anova(simp.lm.quad)
+plot(shan.lm.sq)
+#not bad
+plot(simp.lm.quad)
+#not great
+
+
+##post-hoc yukey;s test
+a2.shan<-aov(shan.sq~Severity*sample_date*sample_type, data=meta.data.microplots)
+a2.simp<-aov(simp.quad~Severity*sample_date*sample_type, data=meta.data.microplots)
+tukey.shan.sev<-TukeyHSD(a2.shan, conf.level = 0.95)
+tukey.simp.sev<-TukeyHSD(a2.simp, conf.level = 0.95)
+tukey.shan.sev
+tukey.simp.sev
+
+##using the sample date as a repeated meaures.. random effect instead 
+#add microplot variable to create random variable
+meta.data.microplots$microplot<-if_else(grepl("10",rownames(meta.data.microplots)),"10",if_else(grepl("12",rownames(meta.data.microplots)),"12",if_else(grepl("11",rownames(meta.data.microplots)),"11",if_else(grepl("13",rownames(meta.data.microplots)),"13",if_else(grepl("14",rownames(meta.data.microplots)),"14",if_else(grepl("15",rownames(meta.data.microplots)),"15",if_else(grepl("16",rownames(meta.data.microplots)),"16",if_else(grepl("9",rownames(meta.data.microplots)),"9",if_else(grepl("8",rownames(meta.data.microplots)),"8",if_else(grepl("7",rownames(meta.data.microplots)),"7",if_else(grepl("6",rownames(meta.data.microplots)),"6",if_else(grepl("5",rownames(meta.data.microplots)),"5",if_else(grepl("4",rownames(meta.data.microplots)),"4",if_else(grepl("3",rownames(meta.data.microplots)),"3",if_else(grepl("2",rownames(meta.data.microplots)),"2","1")))))))))))))))
+meta.data.microplots$microplot<-as.factor(meta.data.microplots$microplot)
+
+a3.shan<-lme4::lmer(shan.sq~Severity*sample_date*sample_type+(1|microplot), data=meta.data.microplots)
+a3.simp<-lme4::lmer(simp.quad~Severity*sample_date*sample_type+(1|microplot), data=meta.data.microplots)
+summary(a3.shan)
+Anova(a3.shan,test.statistic = "F")
+Anova(a3.simp,test.statistic = "F")
+
+##post-hoc yukey;s test
+emmeans::emmeans(a3.shan,specs = pairwise ~Severity,data=meta.data.microplots,type="response")
+emmeans::emmeans(a3.shan,specs = pairwise ~sample_date,data=meta.data.microplots,type="response")
+emmeans::emmeans(a3.shan,specs = pairwise ~Severity*sample_type,data=meta.data.microplots,type="response")
+
+
+```
+
+
+
+
+#pRDA - commuinty composition analysis
+```{r}
+##first need to have env dataset with severty, sample data for all months (NO-LP severe and no 16)
+phylo.wol.16<-subset_samples(phylo.wolp, !grepl("16",sample_names(phylo.wolp)))
+mineral.phylo<-subset_samples(phylo.wol.16, sample_type == "Mineral")
+organic.phylo<-subset_samples(phylo.wol.16, sample_type == "Surface")
+
+#need to have conditioning matrix with lat and lon
+lat.log<-read_delim("microplot.coordinates.txt",delim = "\t",col_names = FALSE)
+
+meta.data.microplots$lon<-if_else(grepl("10",rownames(meta.data.microplots)),lat.log[10,]$X4,if_else(grepl("12",rownames(meta.data.microplots)),lat.log[12,]$X4,if_else(grepl("11",rownames(meta.data.microplots)),lat.log[11,]$X4,if_else(grepl("13",rownames(meta.data.microplots)),lat.log[13,]$X4,if_else(grepl("14",rownames(meta.data.microplots)),lat.log[14,]$X4,if_else(grepl("15",rownames(meta.data.microplots)),lat.log[15,]$X4,if_else(grepl("16",rownames(meta.data.microplots)),lat.log[16,]$X4,if_else(grepl("9",rownames(meta.data.microplots)),lat.log[9,]$X4,if_else(grepl("8",rownames(meta.data.microplots)),lat.log[8,]$X4,if_else(grepl("7",rownames(meta.data.microplots)),lat.log[7,]$X4,if_else(grepl("6",rownames(meta.data.microplots)),lat.log[6,]$X4,if_else(grepl("5",rownames(meta.data.microplots)),lat.log[5,]$X4,if_else(grepl("4",rownames(meta.data.microplots)),lat.log[4,]$X4,if_else(grepl("3",rownames(meta.data.microplots)),lat.log[3,]$X4,if_else(grepl("2",rownames(meta.data.microplots)),lat.log[2,]$X4,lat.log[1,]$X4)))))))))))))))
+
+
+meta.data.microplots$lat<-if_else(grepl("10",rownames(meta.data.microplots)),lat.log[10,]$X3,if_else(grepl("12",rownames(meta.data.microplots)),lat.log[12,]$X3,if_else(grepl("11",rownames(meta.data.microplots)),lat.log[11,]$X3,if_else(grepl("13",rownames(meta.data.microplots)),lat.log[13,]$X3,if_else(grepl("14",rownames(meta.data.microplots)),lat.log[14,]$X3,if_else(grepl("15",rownames(meta.data.microplots)),lat.log[15,]$X3,if_else(grepl("16",rownames(meta.data.microplots)),lat.log[16,]$X3,if_else(grepl("9",rownames(meta.data.microplots)),lat.log[9,]$X3,if_else(grepl("8",rownames(meta.data.microplots)),lat.log[8,]$X3,if_else(grepl("7",rownames(meta.data.microplots)),lat.log[7,]$X3,if_else(grepl("6",rownames(meta.data.microplots)),lat.log[6,]$X3,if_else(grepl("5",rownames(meta.data.microplots)),lat.log[5,]$X3,if_else(grepl("4",rownames(meta.data.microplots)),lat.log[4,]$X3,if_else(grepl("3",rownames(meta.data.microplots)),lat.log[3,]$X3,if_else(grepl("2",rownames(meta.data.microplots)),lat.log[2,]$X3,lat.log[1,]$X3)))))))))))))))
+
+
+#seperate off the sample date and severity 
+meta.data.microplots.organic<-meta.data.microplots[meta.data.microplots$sample_type== "Surface",]
+meta.data.microplots.organic<-meta.data.microplots.organic[!grepl("16",rownames(meta.data.microplots.organic)),]
+meta.data.microplots.mineral<-meta.data.microplots[meta.data.microplots$sample_type== "Mineral",]
+meta.data.microplots.mineral<-meta.data.microplots.mineral[!grepl("16",rownames(meta.data.microplots.mineral)),]
+
+
+lat.min<-as.data.frame(meta.data.microplots.mineral[,which(colnames(meta.data.microplots.mineral) %in% c("lon","lat"))],row.names = rownames(meta.data.microplots.mineral))
+lat.org<-as.data.frame(meta.data.microplots.organic[,which(colnames(meta.data.microplots.organic) %in% c("lon","lat"))],row.names = rownames(meta.data.microplots.organic))
+
+d.geo.m<-distm(lat.min,fun = distHaversine) #calculate distances 
+d.geo.s<-distm(lat.org,fun = distHaversine)
+
+dist.geo.m<-as.dist(d.geo.m) # create distance object
+dist.geo.s<-as.dist(d.geo.s)
+
+dist.geo.m<-as.matrix(dist.geo.m) # change into matrix 
+dist.geo.s<-as.matrix(dist.geo.s)
+
+dist.eucli.m<-vegdist(dist.geo.m, method = "euclidean") #change from distance matrix to euclidean distance 
+dist.pcoa.m<-pcnm(dist.eucli.m) # use pcnm to get eigen vectors 
+dist.pcoa.m$vectors
+
+dist.eucli.s<-vegdist(dist.geo.s, method = "euclidean")
+dist.pcoa.s<-pcnm(dist.eucli.s)
+dist.pcoa.s$vectors
+
+##need to remove taxa that are zeros in dataset
+alltaxa.min<-otu_table(mineral.phylo)
+goodtaxa.min<-alltaxa.min[-which(rowSums(otu_table(mineral.phylo)) == 0),]
+goodtaxa.min<-otu_table(goodtaxa.min,taxa_are_rows = TRUE)
+taxa.good.min<-as.data.frame(rownames(goodtaxa.min))
+colnames(taxa.good.min)<-"full.taxa"
+taxa.good.min<-separate(taxa.good.min,col= "full.taxa",into = c("Kingdom","Phylum","Class","Order","Family","Genus","Species"),sep = ";")
+good.taxonomy.min<-tax_table(taxa.good.min)
+taxa_names(good.taxonomy.min)<-rownames(goodtaxa.min)
+sd.min<-sample_data(mineral.phylo)
+mineral.phylo.clean<-merge_phyloseq(sd.min,goodtaxa.min,good.taxonomy.min)
+mineral.phylo.clean #should be 2714 taxa now
+
+alltaxa.org<-otu_table(organic.phylo)
+goodtaxa.org<-alltaxa.org[-which(rowSums(otu_table(organic.phylo)) == 0),]
+goodtaxa.org<-otu_table(goodtaxa.org,taxa_are_rows = TRUE)
+taxa.good.org<-as.data.frame(rownames(goodtaxa.org))
+colnames(taxa.good.org)<-"full.taxa"
+taxa.good.org<-separate(taxa.good.org,col= "full.taxa",into = c("Kingdom","Phylum","Class","Order","Family","Genus","Species"),sep = ";")
+good.taxonomy.org<-tax_table(taxa.good.org)
+taxa_names(good.taxonomy.org)<-rownames(goodtaxa.org)
+sd.org<-sample_data(organic.phylo)
+organic.phylo.clean<-merge_phyloseq(sd.org,goodtaxa.org,good.taxonomy.org)
+organic.phylo.clean #should be 4824 taxa now
+
+
+psotu2veg <- function(physeq) {
+  OTU <- otu_table(physeq)
+  if (taxa_are_rows(OTU)) {
+    OTU <- t(OTU)
+  }
+  return(as(OTU, "matrix"))
+}
+
+##hellinger transform the mineral and organic dataset 
+spe.hel.min<-decostand(psotu2veg(mineral.phylo.clean),method = "hellinger")
+spe.hel.org<-decostand(psotu2veg(organic.phylo.clean),method = "hellinger")
+
+
+#first mineral -----
+#first stepwise to see which distance vectors should be include
+min.pcnm <- capscale(spe.hel.min ~ ., 
+                     data=as.data.frame(scores(dist.pcoa.m)), 
+                     distance='bray')
+min.pcnm
+#set up null model
+mod0.pcnm <- capscale(spe.hel.min ~ 1, data=as.data.frame(scores(dist.pcoa.m)), distance='bray')
+#stepwise with ordi
+set.seed(16)
+step.pcnm <- ordistep(mod0.pcnm, scope=formula(min.pcnm))
+step.pcnm
+step.pcnm$anova # these are the signifcant axes 
+
+min.sub.pcnm<-scores(dist.pcoa.m,choices = c(1:13))
+
+##now var part with severity, sample data, spatial gradients
+
+set.seed(16)
+min.varpart<-varpart(spe.hel.min, 
+                     ~ Severity, 
+                     ~ sample_date, min.sub.pcnm, data = meta.data.microplots.mineral)
+min.varpart
+#plot
+par(mfrow=c(1, 2))
+showvarparts(3)
+plot(min.varpart)
+
+#test for significance
+
+#sev only
+sev.rda<-rda(spe.hel.min  ~ Severity + Condition(meta.data.microplots.mineral$sample_date) + Condition(min.sub.pcnm), 
+          data=meta.data.microplots.mineral)
+sev.dbrda<-capscale(spe.hel.min  ~ Severity + Condition(meta.data.microplots.mineral$sample_date) + Condition(min.sub.pcnm), dist="bray",
+          data=meta.data.microplots.mineral)
+anova(sev.dbrda)
+summary(sev.dbrda)
+plot(sev.rda, scaling = 2)
+anova.cca(sev.rda)
+RsquareAdj(sev.dbrda)$adj.r.squared
+
+#date
+date.rda<-rda(spe.hel.min  ~ sample_date + Condition(meta.data.microplots.mineral$Severity)  
+          + Condition(min.sub.pcnm), 
+          data=meta.data.microplots.mineral)
+date.rda<-capscale(spe.hel.min  ~ sample_date + Condition(meta.data.microplots.mineral$Severity)  
+          + Condition(min.sub.pcnm),dist="bray", 
+          data=meta.data.microplots.mineral)
+anova(date.rda)
+summary(date.rda)
+plot(date.rda)
+
+#dist
+dist.rda<-rda(spe.hel.min  ~ min.sub.pcnm + Condition(meta.data.microplots.mineral$Severity)  
+          + Condition(meta.data.microplots.mineral$sample_date), 
+          data=meta.data.microplots.mineral)
+anova(dist.rda)
+
+#sev and date
+set.seed(14)
+min.sev.date.rda<-rda(spe.hel.min  ~ Severity * sample_date + Condition(min.sub.pcnm), 
+          data=meta.data.microplots.mineral)
+min.sev.date.dbrda<-capscale(spe.hel.min  ~ Severity * sample_date + Condition(min.sub.pcnm),dist="bray" ,
+          data=meta.data.microplots.mineral)
+
+anova(min.sev.date.dbrda, by = "terms")
+anova(min.sev.date.dbrda, by= "axis")
+summary(min.sev.date.dbrda)
+plot(min.sev.date.dbrda, scaling = 1)
+RsquareAdj(min.sev.date.dbrda)$adj.r.squared
+alias(min.sev.date.dbrda)
+
+
+#test for colinearity of this model (note the conditioned and constrained factors tested together... )
+vif.cca(min.sev.date.rda)
+
+#plot all rda axes and arrange 
+min.sev.date.scores.1.2<-scores(min.sev.date.dbrda,choices = c(1,2),display = "sites")
+tiff("min.dbrda.feb22.2023.tiff",units = "px",width = 9000,height = 6302,res = 1000)
+plot(min.sev.date.scores.1.2,ylab = "CAP2 (6.52%)",xlab = "CAP1 (13.74%)", col=colvec.2[meta.data.microplots.mineral$Severity],pch=shvec[meta.data.microplots.mineral$sample_date],bg=colvec[meta.data.microplots.mineral$Severity],ylim = c(-1.1,1.1),xlim = c(-2,2))
+dev.off()
+
+# now run for surface -----
+org.pcnm <- capscale(spe.hel.org ~ ., 
+                     data=as.data.frame(scores(dist.pcoa.s)), 
+                     distance='bray')
+org.pcnm
+#set up null model
+sod0.pcnm <- capscale(spe.hel.org ~ 1, data=as.data.frame(scores(dist.pcoa.s)), distance='bray')
+#stepwise with ordi
+set.seed(16)
+step.pcnm.s <- ordistep(sod0.pcnm, scope=formula(org.pcnm))
+step.pcnm.s
+step.pcnm.s$anova # these are the signifcant axes 
+
+org.sub.pcnm<-scores(dist.pcoa.s,choices = c(1:3,5,8,10:12))
+
+##now var part with severity, sample data, spatial gradients
+
+set.seed(16)
+org.varpart<-varpart(spe.hel.org, 
+                     ~ Severity, 
+                     ~ sample_date, org.sub.pcnm, data = meta.data.microplots.organic)
+org.varpart
+#plot
+
+#plot final varpart ----
+tiff("min.sur.varpart.feb22.2023.tiff",units = "px",width = 6302,height = 9000,res = 1000)
+par(mfrow=c(2, 1))
+plot(org.varpart)
+mtext(at=-2,side=3,"A",cex=1.5)
+plot(min.varpart)
+mtext(at=-2,side=3,"B",cex=1.5)
+dev.off()
+
+#test for significance
+
+#sev only
+sev.rda<-rda(spe.hel.org  ~ Severity + Condition(meta.data.microplots.organic$sample_date) + Condition(org.sub.pcnm), 
+          data=meta.data.microplots.organic)
+sev.rda<-capscale(spe.hel.org  ~ Severity + Condition(meta.data.microplots.organic$sample_date) + Condition(org.sub.pcnm),dist="bray",
+          data=meta.data.microplots.organic)
+anova(sev.rda)
+summary(sev.rda)
+plot(sev.rda, scaling = 2)
+RsquareAdj(sev.rda)$adj.r.squared
+
+#date
+date.rda<-rda(spe.hel.org  ~ sample_date + Condition(meta.data.microplots.organic$Severity)  
+          + Condition(org.sub.pcnm), 
+          data=meta.data.microplots.organic)
+date.rda<-capscale(spe.hel.org  ~ sample_date + Condition(meta.data.microplots.organic$Severity)  
+          + Condition(org.sub.pcnm), dist="bray",
+          data=meta.data.microplots.organic)
+anova(date.rda)
+summary(date.rda)
+plot(date.rda)
+#dist
+dist.rda<-rda(spe.hel.org  ~ org.sub.pcnm + Condition(meta.data.microplots.organic$Severity)  
+          + Condition(meta.data.microplots.organic$sample_date), 
+          data=meta.data.microplots.organic)
+anova(dist.rda)
+
+#sev and date
+set.seed(14)
+sev.date.rda<-rda(spe.hel.org  ~ Severity * sample_date + Condition(org.sub.pcnm), 
+          data=meta.data.microplots.organic)
+sev.date.dbrda<-capscale(spe.hel.org  ~ Severity * sample_date + Condition(org.sub.pcnm),dist="bray", 
+          data=meta.data.microplots.organic)
+
+
+anova(sev.date.dbrda, by= "terms")
+anova(sev.date.dbrda, by = "axis")
+summary(sev.date.dbrda)
+plot(sev.date.dbrda, scaling = 1)
+RsquareAdj(sev.date.dbrda)$adj.r.squared
+alias(sev.date.dbrda) # nothing is aliased
+
+
+#test for colinearity in this model 
+vif.cca(sev.date.rda)
+
+#plot all rda axes and arrange 
+org.sev.date.scores.1.2<-scores(sev.date.dbrda,choices = c(1,2),display = "sites")
+tiff("sev.dbrda.feb22.2023.tiff",units = "px",width = 9000,height = 6302,res = 1000)
+plot(org.sev.date.scores.1.2,ylab = "CAP2 (7.41%)",xlab = "CAP1 (21.58%)", col=colvec.2[meta.data.microplots.organic$Severity],pch=shvec[meta.data.microplots.organic$sample_date],bg=colvec[meta.data.microplots.organic$Severity],ylim = c(-2,2),xlim = c(-2,2))
+dev.off()
+
+#finalize plotting dbrda----
+colvec<-c("cornflowerblue","lightgoldenrod1","orange1","firebrick3","tomato4")
+colvec.2<-c("cornflowerblue","chocolate","orange1","firebrick3","tomato4")
+shvec<-c(21,22,23,24) #point shape vector
+
+
+tiff("sev.min.dbrda.mar20.2023.tiff",units = "px",width = 5512,height = 6200,res = 1000)
+par(mfrow = c(2,1),mar = c(3, 3, 2.3, 6.3),mgp=c(1.5,0.5,0))
+plot(org.sev.date.scores.1.2,ylab = "CAP2 (7.41%)",xlab = "CAP1 (21.58%)",cex.lab=0.60,axes=FALSE, col=colvec.2[meta.data.microplots.organic$Severity],pch=shvec[meta.data.microplots.organic$sample_date],bg=colvec[meta.data.microplots.organic$Severity],ylim = c(-2,2),xlim = c(-2,2),cex=0.6)
+box()
+axis(1,at=seq(-2,2,1),tck=-0.03,cex.axis = 0.5)
+axis(2,at=seq(-2,2,1),tck=-0.03,cex.axis = 0.5)
+mtext(at=-2.3,side=3,"A",line=1.5, cex=0.85)
+mtext(at=2,side=3,"Surface",cex=0.75)
+legend("bottomright",                    # Add legend to plot
+       legend = c("September","October","May","June"),
+       col = "black",
+       pch = shvec,
+       bty = "n",
+       inset = c(-0.30, 0),
+       cex = 0.75,
+       xpd = TRUE)
+plot(min.sev.date.scores.1.2,ylab = "CAP2 (6.52%)",xlab = "CAP1 (13.74%)",,cex.lab=0.60,axes=FALSE, col=colvec.2[meta.data.microplots.mineral$Severity],pch=shvec[meta.data.microplots.mineral$sample_date],bg=colvec[meta.data.microplots.mineral$Severity],ylim = c(-1.1,1.1),xlim = c(-2,2),cex=0.6)
+box()
+axis(1,at=seq(-2,2,1),tck=-0.03,cex.axis = 0.5,mgp=c(1,0.5,0))
+axis(2,at=seq(-1,1,0.5),tck=-0.03,cex.axis = 0.5,mgp=c(1,0.5,0))
+mtext(at=-2.3,side=3,"B",line = 1.5,cex=0.85)
+mtext(at=2,side=3,"Mineral",cex=0.75)
+legend("topright",                    # Add legend to plot
+       legend = c("Unburnt","Low","Medium","Medium-Severe","Severe"),
+       col = colvec,
+       pch = 20,
+       bty="n",
+       inset = c(-0.35, 0),
+       cex = 0.75,
+       xpd = TRUE)
+dev.off()
+```
+
+#Mantel tests of spatial distance and community distance
+```{r}
+
+##create bray-curtis dissimilarity  matrix from phyloseq otu object using vegan
+abundance.dist.sept<-vegdist(psotu2veg(phylo.sept), method= "bray")
+abundance.dist.oct<-vegdist(psotu2veg(phylo.oct), method= "bray")
+abundance.dist.may<-vegdist(psotu2veg(phylo.may), method= "bray")
+abundance.dist.june<-vegdist(psotu2veg(phylo.june), method= "bray")
+
+#create dataframes of the sample data
+sd.sept<-sample_data(phylo.sept)
+sd.oct<-sample_data(phylo.oct)
+sd.may<-sample_data(phylo.may)
+sd.june<-sample_data(phylo.june)
+
+#create dataframes of just the lat/lon data 
+geo.dist.sept<-meta.data.microplots[which(meta.data.microplots$sample_date == "September"),c(10,11)]
+geo.dist.oct<-meta.data.microplots[which(meta.data.microplots$sample_date == "October"),c(10,11)]
+geo.dist.may<-meta.data.microplots[which(meta.data.microplots$sample_date == "May"),c(10,11)]
+geo.dist.june<-meta.data.microplots[which(meta.data.microplots$sample_date == "June"),c(10,11)]
+
+#create distance matrices
+d.geo.sept<-distm(geo.dist.sept,fun = distHaversine)
+d.geo.oct<-distm(geo.dist.oct,fun = distHaversine)
+d.geo.may<-distm(geo.dist.may,fun = distHaversine)
+d.geo.june<-distm(geo.dist.june,fun = distHaversine)
+
+dist.geo.sept<-as.dist(d.geo.sept)
+dist.geo.oct<-as.dist(d.geo.oct)
+dist.geo.may<-as.dist(d.geo.may)
+dist.geo.june<-as.dist(d.geo.june)
+
+##perform mantel tests 
+set.seed(14)
+abund.geo.sept<-mantel(abundance.dist.sept,dist.geo.sept,method = "pearson", permutations = 9999, na.rm = TRUE)
+abund.geo.sept
+abund.geo.oct<-mantel(abundance.dist.oct,dist.geo.oct,method = "pearson", permutations = 9999, na.rm = TRUE)
+abund.geo.oct
+abund.geo.may<-mantel(abundance.dist.may,dist.geo.may,method = "pearson", permutations = 9999, na.rm = TRUE)
+abund.geo.may
+abund.geo.june<-mantel(abundance.dist.june,dist.geo.june,method = "pearson", permutations = 9999, na.rm = TRUE)
+abund.geo.june
+
+##all show significance but less so for May and Oct
+
+## lets try to visualize https://jkzorz.github.io/2019/07/09/scatter-plots.html
+aa <-as.vector(abundance.dist.sept)
+gg<-as.vector(dist.geo.sept)
+bb<-as.vector(abundance.dist.oct)
+hh<-as.vector(dist.geo.oct)
+cc <-as.vector(abundance.dist.may)
+ii<-as.vector(dist.geo.may)
+dd<-as.vector(abundance.dist.june)
+jj<-as.vector(dist.geo.june)
+
+ag<-data.frame(aa,gg)
+bh<-data.frame(bb,hh)
+ci<-data.frame(cc,ii)
+dj<-data.frame(dd,jj)
+
+
+sept.mantel = ggplot(ag, aes(y = aa, x = gg)) + 
+    geom_point(size = 3, alpha = 0.5) + 
+    labs(x = NULL, y = "Bray-Curtis Dissimilarity",subtitle = "September") + 
+    theme( axis.text.x = element_text(face = "bold",colour = "black", size = 12), 
+        axis.text.y = element_text(face = "bold", size = 8, colour = "black"), 
+        axis.title= element_text(face = "bold", size = 14, colour = "black"), 
+        panel.background = element_blank(), 
+        panel.border = element_rect(fill = NA, colour = "black"))
+sept.mantel
+
+oct.mantel = ggplot(bh, aes(y = bb, x = hh)) + 
+    geom_point(size = 3, alpha = 0.5) + 
+    labs(x = NULL, y = NULL,subtitle = "October") + 
+    theme( axis.text.x = element_text(face = "bold",colour = "black", size = 12), 
+        axis.text.y = element_blank(), 
+        axis.title= element_text(face = "bold", size = 14, colour = "black"), 
+        panel.background = element_blank(), 
+        panel.border = element_rect(fill = NA, colour = "black"))
+
+oct.mantel
+
+may.mantel = ggplot(ci, aes(y = cc, x = ii)) + 
+    geom_point(size = 3, alpha = 0.5) + 
+    labs(x = NULL, y = "Bray-Curtis Dissimilarity",subtitle = "May") + 
+    theme( axis.text.x = element_text(face = "bold",colour = "black", size = 12), 
+        axis.text.y = element_text(face = "bold", size = 8, colour = "black"), 
+        axis.title= element_text(face = "bold", size = 14, colour = "black"), 
+        panel.background = element_blank(), 
+        panel.border = element_rect(fill = NA, colour = "black"))
+
+may.mantel
+
+june.mantel = ggplot(dj, aes(y = dd, x = jj)) + 
+    geom_point(size = 3, alpha = 0.5) + 
+    labs(x = NULL,y = NULL,subtitle = "June") + 
+    theme( axis.text.x = element_text(face = "bold",colour = "black", size = 12), 
+        axis.text.y = element_blank(), 
+        axis.title= element_text(face = "bold", size = 14, colour = "black"), 
+        panel.background = element_blank(), 
+        panel.border = element_rect(fill = NA, colour = "black"))
+
+june.mantel
+
+ggarrange(sept.mantel,oct.mantel,may.mantel,june.mantel,font.label = c(size="5",face="plain"))
+
+#now without 16
+
+#must run in order - should result in 30 samples for sept/oct and 38 for may/june
+sept.phylo.2.no16<-subset_samples(phylo.sept, sample_names(phylo.sept) != "M16A")
+sept.phylo.2.no16<-subset_samples(sept.phylo.2.no16, sample_names(sept.phylo.2.no16) != "O16A")
+
+oct.phylo.2.no16<-subset_samples(phylo.oct, sample_names(phylo.oct) != "M16C")
+oct.phylo.2.no16<-subset_samples(oct.phylo.2.no16, sample_names(oct.phylo.2.no16) != "O16C")
+
+may.phylo.2.no16<-subset_samples(phylo.may, sample_names(phylo.may) != "M16E")
+may.phylo.2.no16<-subset_samples(may.phylo.2.no16, sample_names(may.phylo.2.no16) != "O16E")
+
+june.phylo.2.no16<-subset_samples(phylo.june, sample_names(phylo.june) != "M16G")
+june.phylo.2.no16<-subset_samples(june.phylo.2.no16, sample_names(june.phylo.2.no16) != "O16G")
+
+##repeat code from above adding .16 to the end of names to differentiate 
+##create bray-curtis dissimilarity  matrix from phyloseq otu object using vegan
+abundance.dist.sept.16<-vegdist(psotu2veg(sept.phylo.2.no16), method= "bray")
+abundance.dist.oct.16<-vegdist(psotu2veg(oct.phylo.2.no16), method= "bray")
+abundance.dist.may.16<-vegdist(psotu2veg(may.phylo.2.no16), method= "bray")
+abundance.dist.june.16<-vegdist(psotu2veg(june.phylo.2.no16), method= "bray")
+
+#create dataframes of the sample data
+sd.sept.16<-sample_data(sept.phylo.2.no16)
+sd.oct.16<-sample_data(oct.phylo.2.no16)
+sd.may.16<-sample_data(may.phylo.2.no16)
+sd.june.16<-sample_data(june.phylo.2.no16)
+
+
+#create dataframes of just the lat/lon data 
+geo.dist.sept.16<-geo.dist.sept[-which(grepl("16",rownames(geo.dist.sept))),]
+geo.dist.oct.16<-geo.dist.oct[-which(grepl("16",rownames(geo.dist.oct))),]
+geo.dist.may.16<-geo.dist.may[-which(grepl("16",rownames(geo.dist.may))),]
+geo.dist.june.16<-geo.dist.june[-which(grepl("16",rownames(geo.dist.june))),]
+
+
+#create distance matrices
+d.geo.sept.16<-distm(geo.dist.sept.16,fun = distHaversine)
+d.geo.oct.16<-distm(geo.dist.oct.16,fun = distHaversine)
+d.geo.may.16<-distm(geo.dist.may.16,fun = distHaversine)
+d.geo.june.16<-distm(geo.dist.june.16,fun = distHaversine)
+
+dist.geo.sept.16<-as.dist(d.geo.sept.16)
+dist.geo.oct.16<-as.dist(d.geo.oct.16)
+dist.geo.may.16<-as.dist(d.geo.may.16)
+dist.geo.june.16<-as.dist(d.geo.june.16)
+
+
+##perform mantel tests 
+set.seed(14)
+abund.geo.sept.16<-mantel(abundance.dist.sept.16,dist.geo.sept.16,method = "pearson", permutations = 9999, na.rm = TRUE)
+abund.geo.sept.16 
+abund.geo.oct.16<-mantel(abundance.dist.oct.16,dist.geo.oct.16,method = "pearson", permutations = 9999, na.rm = TRUE)
+abund.geo.oct.16
+abund.geo.may.16<-mantel(abundance.dist.may.16,dist.geo.may.16,method = "pearson", permutations = 9999, na.rm = TRUE)
+abund.geo.may.16 
+abund.geo.june.16<-mantel(abundance.dist.june.16,dist.geo.june.16,method = "pearson", permutations = 9999, na.rm = TRUE)
+abund.geo.june.16
+
+##
+
+## lets try to visualize https://jkzorz.github.io/2019/07/09/scatter-plots.html
+##variables are not renamed for this analysis so they must be rerun for each visualization 
+aa <-as.vector(abundance.dist.sept.16)
+gg<-as.vector(dist.geo.sept.16)
+bb<-as.vector(abundance.dist.oct.16)
+hh<-as.vector(dist.geo.oct.16)
+cc <-as.vector(abundance.dist.may.16)
+ii<-as.vector(dist.geo.may.16)
+dd<-as.vector(abundance.dist.june.16)
+jj<-as.vector(dist.geo.june.16)
+
+ag<-data.frame(aa,gg)
+bh<-data.frame(bb,hh)
+ci<-data.frame(cc,ii)
+dj<-data.frame(dd,jj)
+
+
+sept.mantel.16 = ggplot(ag, aes(y = aa, x = gg)) + 
+    geom_point(size = 3, alpha = 0.5) + 
+    labs(x = NULL, y = "Bray-Curtis Dissimilarity",subtitle = "September") + 
+    theme( axis.text.x = element_text(face = "bold",colour = "black", size = 12), 
+        axis.text.y = element_text(face = "bold", size = 8, colour = "black"), 
+        axis.title= element_text(face = "bold", size = 14, colour = "black"), 
+        panel.background = element_blank(), 
+        panel.border = element_rect(fill = NA, colour = "black"))
+sept.mantel.16
+
+oct.mantel.16 = ggplot(bh, aes(y = bb, x = hh)) + 
+    geom_point(size = 3, alpha = 0.5) + 
+    labs(x = NULL,y = NULL,subtitle = "October") + 
+    theme( axis.text.x = element_text(face = "bold",colour = "black", size = 12), 
+        axis.text.y = element_blank(), 
+        axis.title= element_text(face = "bold", size = 14, colour = "black"), 
+        panel.background = element_blank(), 
+        panel.border = element_rect(fill = NA, colour = "black"))
+
+oct.mantel.16
+
+may.mantel.16 = ggplot(ci, aes(y = cc, x = ii)) + 
+    geom_point(size = 3, alpha = 0.5) + 
+    labs(x = "Physical distance", y = "Bray-Curtis Dissimilarity",subtitle = "May") + 
+    theme( axis.text.x = element_text(face = "bold",colour = "black", size = 12), 
+        axis.text.y = element_text(face = "bold", size = 8, colour = "black"), 
+        axis.title= element_text(face = "bold", size = 14, colour = "black"), 
+        panel.background = element_blank(), 
+        panel.border = element_rect(fill = NA, colour = "black"))
+
+may.mantel.16
+
+june.mantel.16 = ggplot(dj, aes(y = dd, x = jj)) + 
+    geom_point(size = 3, alpha = 0.5) + 
+    labs(x = "Physical distance",y = NULL,subtitle = "June") + 
+    theme( axis.text.x = element_text(face = "bold",colour = "black", size = 12), 
+        axis.text.y = element_blank(), 
+        axis.title= element_text(face = "bold", size = 14, colour = "black"), 
+        panel.background = element_blank(), 
+        panel.border = element_rect(fill = NA, colour = "black"))
+
+june.mantel.16
+
+ggarrange(sept.mantel.16,oct.mantel.16,may.mantel.16,june.mantel.16,font.label = c(size="5",face="plain"))
+
+
+tiff("mantel.geo.dist.mar4.2023.tiff",res = 1000,width = 8000,height = 10000,units = "px")
+sept.mantel+oct.mantel+may.mantel+june.mantel+sept.mantel.16+oct.mantel.16+may.mantel.16+june.mantel.16+plot_layout(nrow = 4)+plot_annotation(tag_levels = "A")
+dev.off()
+```
+
+
+##using ANCOM-BC to test differential abun of pyrophilous species
+```{r}
+#try comparing only burnt to unburnt 
+# create metadata variable where severe, med-severe, medium, surface all = burnt 
+
+##lets test at the genus level
+genus_data<-aggregate_taxa(phylo.wolp.10,"Genus")##522 taxa...
+write_delim(as.data.frame(otu_table(genus_data)),"genus.data.txt",delim="\t")
+write_delim(as.data.frame(taxa_names(genus_data)),"genus.data.names.txt",delim="\t")
+
+
+#ancombc with burn status
+set.seed(14)
+dif.abun.status<-ancombc2(genus_data,fix_formula="burn.status+sample_date+sample_type",p_adj_method = "bonferroni",lib_cut = 0,group = "burn.status",global = TRUE)
+length(which(dif.abun.status$res$diff_burn.statusUnburnt ==TRUE)) #59 taxa
+
+diff.abun.asv<-asv.10[which(rownames(asv.10) %in% dif.abun.status$res$taxon),]
+diff.abun.asv$asv<-rownames(asv.10[which(rownames(asv.10) %in% dif.abun.status$res$taxon),])
+diff.abun.asv<-diff.abun.asv[which(dif.abun.status$res$diff_burn.statusUnburnt == TRUE),]
+write_csv(diff.abun.asv,"test.diff.csv")
+```
+
+#plot differential abundance
+```{r}
+res_prim = dif.abun.status$res
+df_burn = res_prim %>%
+    dplyr::select(taxon, ends_with("burn.statusUnburnt")) 
+df_fig_age = df_burn %>%
+    filter(diff_burn.statusUnburnt == 1) %>% 
+    arrange(desc(lfc_burn.statusUnburnt)) %>%
+    mutate(direct = ifelse(lfc_burn.statusUnburnt < 0, "Positive LFC", "Negative LFC"))
+df_fig_age$taxon = factor(df_fig_age$taxon, levels = df_fig_age$taxon)
+df_fig_age$direct = factor(df_fig_age$direct, 
+                           levels = c("Positive LFC", "Negative LFC"))
+
+##change signs so burnt is on top and unburnt on bottom
+df_fig_age$lfc_burn.statusUnburnt<-df_fig_age$lfc_burn.statusUnburnt*-1
+#remove the g__
+df_fig_age<-separate(df_fig_age,col= "taxon",into = c("remove","Genus"),sep = "g__")
+#add the higher level taxonomy name to the unidentified to species
+df_fig_age[5,2]<-"Tricholomataceae"
+df_fig_age[18,2]<-"Pleosporales"
+df_fig_age[21,2]<-"Pezizales"
+df_fig_age[22,2]<-"Tremellales"
+df_fig_age[24,2]<-"Sympoventuriaceae"
+df_fig_age[25,2]<-"Ceratobasidiaceae"
+df_fig_age[27,2]<-"Chaetothyriales"
+df_fig_age[32,2]<-"Pezizomycetes"
+df_fig_age[44,2]<-"Spizellomycetales"
+df_fig_age[46,2]<-"GS25"
+df_fig_age<-df_fig_age[,-1]
+
+#add colour to the df_fig_age so that I can colour by functional guild
+df_fig_age$colour<-if_else(df_fig_age$Genus %in% c("Wilcoxina","Rhizopogon","Geopyxis","Inocybe","Amphinema","Tomentella","Pseudotomentella"),"olivedrab",if_else(df_fig_age$Genus %in% c("Gremmenia","Fusicladium","Mycosphaerella"),"gray25",if_else(df_fig_age$Genus %in% c("Basidioascus","Anthracobia","Morchella","Tricharina","Pyronema","Sympodiella","Cryptosporiopsis","Pachylepyrium","Peziza","Borealophlyctis","Comoclathris","Umbelopsis","Infundichalara","Lachnum","Scleropezicula"),"darkorange3",if_else(df_fig_age$Genus %in% c("Cadophora","Cladonia"),"lightskyblue",if_else(df_fig_age$Genus %in% c("Calyptrozyma","Naganishia","Saitoella","Aureobasidium","Sporobolomyces","Dioszegia","Udeniomyces","Mortierella","Knufia","Cladophialophora"),"lightpink1",if_else(df_fig_age$Genus %in% c("Didymella","Spizellomyces","Juncaceicola","Mycena","Neocamarosporium","Coniothyrium"),"steelblue3",if_else(df_fig_age$Genus %in% c("Coniochaeta","Alternaria","Chalara","Athelia","Venturia"),"wheat4",if_else(df_fig_age$Genus %in% c("Pezoloma"),"yellow3",if_else(df_fig_age$Genus %in% c("Tricholomataceae","Pleosporales","Pezizales","Tremellales","Sympoventuriaceae","Ceratobasidiaceae","Pezizomycetes","Spizellomycetales","GS25","Chaetothyriales"),"gray","white")))))))))
+  
+guild.df.abun.plot$colour<-ifelse(guild.df.abun.plot$guild.df.abun.plot == "E","olivedrab",ifelse(guild.df.abun.plot$guild.df.abun.plot == "Mo","orange",ifelse(guild.df.abun.plot$guild.df.abun.plot =="P","gray25",ifelse(guild.df.abun.plot$guild.df.abun.plot == "P-Sp","steelblue3",ifelse(guild.df.abun.plot$guild.df.abun.plot == "P-Sp-Sy","wheat4",ifelse(guild.df.abun.plot$guild.df.abun.plot == "Sp","darkorange3",ifelse(guild.df.abun.plot$guild.df.abun.plot == "P-Sp-E","yellow3",ifelse(guild.df.abun.plot$guild.df.abun.plot == "Sy","lightskyblue",ifelse(guild.df.abun.plot$guild.df.abun.plot == "Ye","lightpink1",as.character(guild.df.abun.plot$guild.df.abun.plot))))))))))
+
+fig_age = df_fig_age[order(df_fig_age$lfc_burn.statusUnburnt,decreasing = FALSE),] %>%
+    ggplot(aes(x = reorder(Genus,-lfc_burn.statusUnburnt), y = lfc_burn.statusUnburnt, fill = colour)) + 
+    geom_bar(stat = "identity", width = 0.7, fill = df_fig_age$colour, 
+             position = position_dodge(width = 0.4)) +
+    geom_errorbar(aes(ymin = lfc_burn.statusUnburnt - se_burn.statusUnburnt, ymax = lfc_burn.statusUnburnt + se_burn.statusUnburnt), 
+                  width = 0.2, position = position_dodge(0.05), color = "black") + 
+    labs(x = NULL, y = "Log fold change", 
+         title = "Unburnt",subtitle = "Burnt") + 
+    scale_fill_discrete(name = NULL) +
+    scale_color_discrete(name = NULL) +
+    theme_bw() + 
+    theme(plot.title = element_text(hjust = 0.80,vjust=-6,size = 10),
+          plot.subtitle = element_text(hjust = 0.20,size=10),
+          panel.grid.minor.y = element_blank(),
+          axis.text.x = element_text(angle = 60, hjust = 1))
+  
+  #geom_vline(xintercept=29.5,linetype="dashed",color="red")
+fig_age
+ggsave("diff_abun_mar4_2023.tiff",units = "px",width = 9000,height = 6000,dpi = 1000)
+
+```
+
+##bias-adjusted abundances date.2
+```{r}
+
+dif.abun.date.bias<-dif.abun.status$samp_frac #extract sampling fraction
+dif.abun.date.bias[is.na(dif.abun.date.bias)]=0 # change from NA to 0 
+
+log_obs_abn<-log(abundances(genus_data)+1) # log the abundances of genus data 
+log_abs_abn_adj<-t(t(log_obs_abn)-dif.abun.date.bias) #subtract the log abundance from the smapling fraction
+summary(log_abs_abn_adj)
+
+#write into csv files
+write_csv(as.data.frame(log_abs_abn_adj), "bias.adjusted.date.dif.abun.mar4.2023.csv")
+rownames(otu_table(genus_data))
+write_csv(as.data.frame(rownames(otu_table(genus_data))),"genus.names.mar4.2023.csv" )
+
+#create dataset with only the pyrophilous fungi 
+log_abs_abn_adj<-as.data.frame(log_abs_abn_adj) #transpose
+only.pyro.log.abs.abn<-as.data.frame(log_abs_abn_adj[which(rownames(log_abs_abn_adj) %in% df_fig_age[df_fig_age$direct == "Positive LFC",]$taxon),]) ## select for only the pyrophilous taxa above 0.05 %
+
+only.pyro.log.abs.abn<-as.data.frame(t(only.pyro.log.abs.abn)) #transpose
+only.pyro.log.abs.abn<-cbind(only.pyro.log.abs.abn,meta.data.microplots[match(rownames(only.pyro.log.abs.abn),rownames(meta.data.microplots)),]$Severity,meta.data.microplots[match(rownames(only.pyro.log.abs.abn),rownames(meta.data.microplots)),]$sample_date) #add the metadata
+colnames(only.pyro.log.abs.abn)<-c(colnames(only.pyro.log.abs.abn[,1:29]),"Severity","sample_date")
+
+#remove the unburnt samples because I dont want there mean change over time influncing the ones in burnt
+only.pyro.log.abs.abn<-only.pyro.log.abs.abn[only.pyro.log.abs.abn$Severity != "Unburnt",]
+
+only.pyro.log.abs.abn.melt<-melt(only.pyro.log.abs.abn[,c(1:29,31)],id.vars = "sample_date",variable.name = "Genus") ##melt into data frame for visualizing, remove column 67 which is severity class
+only.pyro.log.abs.abn.melt$value<-as.numeric(only.pyro.log.abs.abn.melt$value)#make value numeric
+
+pyro.abs.abun.mean.burnt<-only.pyro.log.abs.abn.melt %>% group_by(sample_date,Genus)%>%summarise(mean = mean(value), sd = sd(value),n= n(),se = sd/sqrt(n))
+
+write_csv(pyro.abs.abun.mean.burnt, "mean.se.sum.pyro.mar4.2023.csv")
+```
+
+# load in funguild data
+```{r}
+FUNGuild <- read_delim("master.otu.funguildformat.feb16.2023.guilds_curated.txt","\t", escape_double = FALSE, trim_ws = TRUE)
+
+##first remove any classifications that are classified as "possible"
+FUNGuild$`Confidence Ranking` <-as.factor(FUNGuild$`Confidence Ranking`)
+levels(FUNGuild$`Confidence Ranking`)
+
+#remove possible
+FUNGuild<-FUNGuild[-which(FUNGuild$`Confidence Ranking` == "Possible"),]
+#remove unidentified
+FUNGuild<-FUNGuild[-which(FUNGuild$`Confidence Ranking` == "-"),]
+
+
+```
+
+## combine guilds into more susicnet categories
+```{r}
+FUNGuild$Guild<-as.factor(FUNGuild$Guild)
+levels(FUNGuild$Guild)
+FUNGuild$`Trophic Mode`<-as.factor(FUNGuild$`Trophic Mode`)
+levels(FUNGuild$`Trophic Mode`)
+FUNGuild$`Growth Morphology`<-as.factor(FUNGuild$`Growth Morphology`)
+levels(FUNGuild$`Growth Morphology`)
+
+
+#if the growth mode is mould or yeast make it into the trophic mode. 
+FUNGuild$guild.2 = as.factor(ifelse(grepl("yeast|Yeast|Mould",FUNGuild$`Growth Morphology`),'Yeast/Mould',ifelse(FUNGuild$`Growth Morphology` == "NULL",as.character(FUNGuild$`Trophic Mode`),as.character(FUNGuild$`Trophic Mode`))))
+
+
+##4: use trophic mode, except breakdown symbiotroph into more specific categories... ----
+##spring
+## create subsetted dataframe with only symbiotroph - use guild.2 which already has new categories with yeast/yeastlike and mould 
+symbio.breakdown<-dplyr::filter(FUNGuild,FUNGuild$guild.2=="Symbiotroph")
+#create dataframe with every other option
+other.breakdown<-dplyr::filter(FUNGuild,FUNGuild$guild.2 !="Symbiotroph")# currectly this is removing any rows without a trophic mode.... 
+symbio.breakdown$Guild<-as.factor(symbio.breakdown$Guild)
+levels(symbio.breakdown$Guild)
+
+#breakdown symbiotroph into "other mycorrhiza", "ectomycorrhiza", and everything else into "symbiotroph"
+symbio.breakdown$Guild.3 = as.factor(
+    ifelse(symbio.breakdown$Guild %in% c('Arbuscular Mycorrhizal','Orchid Mycorrhizal'),
+        'Arbusular/Orchid Mycorrhizal',ifelse(symbio.breakdown$Guild %in% c('Endophyte','Epiphyte','Lichenized','Lichenized-Wood Saprotroph'),'Symbiotroph',as.character(symbio.breakdown$Guild))))
+
+##create subset of all other modes that contain a guild with ectomycorrhizal 
+other.ecto.breakdown<-dplyr::filter(other.breakdown,grepl(pattern='Ectomycorrhizal', Guild)) #with ecto in name
+opposite.ecto.breakdown<-dplyr::filter(other.breakdown,!grepl(pattern='Ectomycorrhizal', Guild)) #without ecto in name 
+other.ecto.breakdown$Guild.3<-other.ecto.breakdown$guild.2 #using the trophic mode into new factor 
+opposite.ecto.breakdown$Guild.3<-opposite.ecto.breakdown$guild.2
+
+other.ecto.breakdown$Guild.3 = as.factor(
+    ifelse(other.ecto.breakdown$Guild.3 == "Pathotroph-Symbiotroph",
+        'Pathotroph-Ectomycorrhizal','Saprotroph-Ectomycorrhizal'))
+
+##rebuild dataframes together 
+Funguild.1<-rbind(symbio.breakdown,other.ecto.breakdown,opposite.ecto.breakdown)
+#confrim we have kept all rows
+length(Funguild.1$Guild.3) 
+##^ back to 647 
+is.factor(Funguild.1$Guild.3)
+levels(Funguild.1$Guild.3)
+
+
+#stats about each guild
+length(Funguild.1[which(Funguild.1$Guild.3 == "Pathotroph"),]$Guild.3)
+length(Funguild.1[which(Funguild.1$Guild.3 == "Ectomycorrhizal"),]$Guild.3)
+length(Funguild.1[which(Funguild.1$Guild.3 == "Symbiotroph"),]$Guild.3)
+length(Funguild.1[which(Funguild.1$Guild.3 == "Pathotroph-Ectomycorrhizal"),]$Guild.3)
+length(Funguild.1[which(Funguild.1$Guild.3 == "Pathotroph-Saprotroph"),]$Guild.3)
+length(Funguild.1[which(Funguild.1$Guild.3 == "Pathotroph-Symbiotroph"),]$Guild.3)
+length(Funguild.1[which(Funguild.1$Guild.3 == "Pathotroph-Saprotroph-Symbiotroph"),]$Guild.3)
+length(Funguild.1[which(Funguild.1$Guild.3 == "Saprotroph"),]$Guild.3)
+length(Funguild.1[which(Funguild.1$Guild.3 == "Saprotroph-Symbiotroph"),]$Guild.3)
+length(Funguild.1[which(Funguild.1$Guild.3 == "Saprotroph-Ectomycorrhizal"),]$Guild.3)
+length(Funguild.1[which(Funguild.1$Guild.3 == "Yeast/Mould"),]$Guild.3)
+
+```
+
+#create functional community data matrix
+```{r}
+##combine spring and fall then split into organic and mineral for the #3 filtering option
+guild.df<-aggregate(Funguild.1[,c(2:38,42:74,91:117,121:151)], Funguild.1["Guild.3"],FUN=sum) #add together all reads in the guilds designated in column "Guild.3", remove LPsev, mock, neg etc
+guild.df<-t(guild.df)
+colnames(guild.df)<-guild.df[1,] # make first row column names 
+guild.df<-as.data.frame(guild.df[-1,]) #remove row with column names
+df.guild.samples<-row.names(guild.df)
+guild.df<-as.data.frame(lapply(guild.df,as.numeric))
+row.names(guild.df)<-df.guild.samples
+guild.df<-cbind(guild.df,meta.data.microplots[match(df.guild.samples,rownames(meta.data.microplots)),])
+
+
+#rename columns to abbreviations for plotting 
+names(guild.df)[names(guild.df) == "Arbusular.Orchid.Mycorrhizal"] <- "AMF/Orch"
+names(guild.df)[names(guild.df) == "Ectomycorrhizal"] <- "E"
+names(guild.df)[names(guild.df) == "Symbiotroph"] <- "Sy"
+names(guild.df)[names(guild.df) == "Pathotroph.Ectomycorrhizal"] <- "P-E"
+names(guild.df)[names(guild.df) == "Saprotroph.Ectomycorrhizal"] <- "Sp-E"
+names(guild.df)[names(guild.df) == "Pathotroph"] <- "P"
+names(guild.df)[names(guild.df) == "Pathotroph.Saprotroph"] <- "P-Sp"
+names(guild.df)[names(guild.df) == "Pathotroph.Saprotroph.Symbiotroph"] <- "P-Sp-Sy"
+names(guild.df)[names(guild.df) == "Pathotroph.Symbiotroph"] <- "P-Sy"
+names(guild.df)[names(guild.df) == "Saprotroph.Symbiotroph"] <- "Sp-Sy"
+names(guild.df)[names(guild.df) == "Saprotroph"] <- "Sp"
+names(guild.df)[names(guild.df) == "Yeast.Mould"] <- "Ye/Mo"
+
+mean(guild.df$E)
+mean(guild.df$Sy)
+mean(guild.df$Sp)
+mean(guild.df$P)
+mean(guild.df$Sp)
+mean(guild.df$`Sp-E`)
+mean(guild.df$`P-Sp`)
+mean(guild.df$`P-Sp-Sy`)
+mean(guild.df$`Sp-Sy`)
+mean(guild.df$`Ye/Mo`)
+mean(guild.df$`P-Sy`)
+
+#seperate based on sample-type
+guild.df.mineral.3<-dplyr::filter(guild.df, sample_type == "Mineral")
+guild.df.organic.3<-dplyr::filter(guild.df, sample_type=="Surface")
+```
+
+##nmds of funtional community
+```{r}
+#create function for ellipses 
+veganCovEllipse <- function (cov, center = c(0, 0), scale = 1, npoints = 100) 
+{
+  theta <- (0:npoints) * 2 * pi/npoints
+  Circle <- cbind(cos(theta), sin(theta))
+  t(center + scale * t(Circle %*% chol(cov)))
+}
+
+#hellinger transform
+guild.df.min.hel<-decostand(guild.df.mineral.3[,2:12],method = "hellinger") # only column 2:13 to remove arbuscular 
+
+#create phyloseq object
+phylo.gui.min.otu<-otu_table(guild.df.min.hel,taxa_are_rows = FALSE) 
+phylo.gui.min.meta<-sample_data(guild.df.mineral.3[,13:15]) #sample date, type and severity 
+sample_names(phylo.gui.min.meta)
+
+phylo.gui.mineral<-phyloseq(phylo.gui.min.otu,phylo.gui.min.meta)
+phylo.gui.mineral
+
+set.seed(14)
+#ordinate
+gui.min<-ordinate(phylo.gui.mineral,method = "NMDS",distance = "bray")
+gui.min$stress #0.1066
+
+#fit the site data
+gui.min.spp.fit <- envfit(gui.min, guild.df.min.hel, permutations = 999) ##2:13 excludes arb/orch
+gui.min.site.scrs <- as.data.frame(scores(gui.min, display = "sites")) #save NMDS results into dataframe
+gui.min.site.scrs <- cbind(gui.min.site.scrs, Severity = guild.df.mineral.3$Severity) #add grouping variable "Severity" to dataframe
+gui.min.site.scrs <- cbind(gui.min.site.scrs, Sample_Date = guild.df.mineral.3$sample_date) #add grouping variable of cluster grouping to dataframe
+gui.min.site.scrs <- cbind(gui.min.site.scrs, Site = rownames(guild.df.mineral.3)) #add site names as variable if you want to display on plot
+head(gui.min.site.scrs)
+
+#fit species scores
+gui.min.spp.scrs <- as.data.frame(scores(gui.min.spp.fit, display = "vectors")) #save species intrinsic values into dataframe
+gui.min.spp.scrs <- cbind(gui.min.spp.scrs, Species = rownames(gui.min.spp.scrs)) #add species names to dataframe
+gui.min.spp.scrs <- cbind(gui.min.spp.scrs, pval = gui.min.spp.fit$vectors$pvals) #add pvalues to dataframe so you can select species which are significant
+gui.min.sig.spp.scrs <- subset(gui.min.spp.scrs, pval<=0.05) #subset data to show species significant at 0.05
+
+head(gui.min.spp.scrs)
+
+##now data for ellipse
+
+df_ell.gui.min.sev <- data.frame() #sets up a data frame before running the function.
+for(g in levels(gui.min.site.scrs$Severity)){
+  df_ell.gui.min.sev <- rbind(df_ell.gui.min.sev, cbind(as.data.frame(with(gui.min.site.scrs[gui.min.site.scrs$Severity==g,],
+                                                         veganCovEllipse(cov.wt(cbind(NMDS1,NMDS2),wt=rep(1/length(NMDS1),length(NMDS1)))$cov,center=c(mean(NMDS1),mean(NMDS2))))) ,Severity=g))
+}
+NMDS.mean.gui.min=aggregate(gui.min.site.scrs[ ,c("NMDS1", "NMDS2")], 
+                         list(group = gui.min.site.scrs$Severity), mean)
+
+
+#plot
+nmds.plot.gui.min <- ggplot(gui.min.site.scrs, aes(x=NMDS1, y=NMDS2))+ #sets up the plot
+  geom_point(aes(NMDS1, NMDS2, colour = factor(gui.min.site.scrs$Severity), shape = factor(gui.min.site.scrs$Sample_Date),fill = factor(gui.min.site.scrs$Severity)), cex = 1)+ 
+  coord_fixed()+
+  labs(subtitle = "Mineral",cex=0.5)+
+  theme_classic()+ 
+  theme(panel.background = element_rect(fill = NA, colour = "black", size = 0.5, linetype = "solid"))+
+  theme(legend.position = "none",text = element_text(size = 5), plot.margin = unit(c(0.01,0.01,0.01,0.01),"cm"),axis.title = element_text(size = 5))+ geom_path(data = df_ell.gui.min.sev, aes(x = NMDS1, y = NMDS2,group=Severity,color=Severity),size=0.25)+ theme(axis.text.x = element_blank(),axis.text.y = element_blank(),axis.ticks = element_blank())+scale_color_manual(values = c("cornflowerblue","chocolate","orange1","firebrick3","tomato4","black"))+ scale_fill_manual(values = c("cornflowerblue","lightgoldenrod1","orange1","firebrick3","tomato4","black"))+scale_shape_manual(values = c(21,22,23,24))+geom_segment(data = gui.min.sig.spp.scrs, aes(x = 0, xend=NMDS1, y=0, yend=NMDS2), arrow = arrow(length = unit(0.10, "cm")), colour = "grey10", lwd=0.3) + #add vector arrows of significant species
+  ggrepel::geom_text_repel(data = gui.min.sig.spp.scrs, aes(x=NMDS1, y=NMDS2, label = Species), cex = 2.5, direction = "both", segment.size = 0.20)
+
+
+guild.df.org.hel<-decostand(guild.df.organic.3[,2:12],method = "hellinger") # only column 2:13 to remove arbuscular 
+
+#first turn into phyloseq object
+phylo.gui.org.otu<-otu_table(guild.df.org.hel,taxa_are_rows = FALSE)
+phylo.gui.org.meta<-sample_data(guild.df.organic.3[,13:15])
+
+phylo.gui.orgeral<-phyloseq(phylo.gui.org.otu,phylo.gui.org.meta)
+phylo.gui.orgeral
+
+set.seed(26)
+#ordinate nmds
+gui.org<-ordinate(phylo.gui.orgeral,method = "NMDS",distance = "bray",trymax=100)
+gui.org$stress #0.1037
+
+#fit the site data
+gui.org.site.scrs <- as.data.frame(scores(gui.org, display = "sites")) #save NMDS results into dataframe
+gui.org.site.scrs <- cbind(gui.org.site.scrs, Severity = guild.df.organic.3$Severity) #add grouping variable "Management" to dataframe
+gui.org.site.scrs <- cbind(gui.org.site.scrs, Sample_Date = guild.df.organic.3$sample_date) #add grouping variable of cluster grouping to dataframe
+gui.org.site.scrs <- cbind(gui.org.site.scrs, Site = rownames(guild.df.organic.3)) #add site names as variable if you want to display on plot
+head(gui.org.site.scrs)
+
+#fit species scores
+gui.org.spp.fit <- envfit(gui.org, guild.df.org.hel, permutations = 999)
+gui.org.spp.scrs <- as.data.frame(scores(gui.org.spp.fit, display = "vectors")) #save species intrinsic values into dataframe
+gui.org.spp.scrs <- cbind(gui.org.spp.scrs, Species = rownames(gui.org.spp.scrs)) #add species names to dataframe
+gui.org.spp.scrs <- cbind(gui.org.spp.scrs, pval = gui.org.spp.fit$vectors$pvals) #add pvalues to dataframe so you can select species which are significant
+gui.org.sig.spp.scrs <- subset(gui.org.spp.scrs, pval<=0.05) #subset data to show species significant at 0.05
+
+gui.org.sig.spp.scrs
+
+##now the org data for ellipse
+df_ell.gui.org.sev <- data.frame() #sets up a data frame before running the function.
+for(g in levels(gui.org.site.scrs$Severity)){
+  df_ell.gui.org.sev <- rbind(df_ell.gui.org.sev, cbind(as.data.frame(with(gui.org.site.scrs [gui.org.site.scrs$Severity==g,],
+                                                         veganCovEllipse(cov.wt(cbind(NMDS1,NMDS2),wt=rep(1/length(NMDS1),length(NMDS1)))$cov,center=c(mean(NMDS1),mean(NMDS2))))) ,Severity=g))
+}
+NMDS.mean.gui.org=aggregate(gui.org.site.scrs[ ,c("NMDS1", "NMDS2")], 
+                         list(group = gui.org.site.scrs$Severity), mean)
+
+
+nmds.plot.gui.org <- ggplot(gui.org.site.scrs, aes(x=NMDS1, y=NMDS2))+ #sets up the plot
+  geom_point(aes(NMDS1, NMDS2, colour = factor(gui.org.site.scrs$Severity), shape = factor(gui.org.site.scrs$Sample_Date),fill = factor(gui.org.site.scrs$Severity)), cex = 1)+ 
+  coord_fixed()+
+  labs(subtitle = "Surface",cex=0.5)+
+  theme_classic()+ 
+  theme(panel.background = element_rect(fill = NA, colour = "black", size = 0.5, linetype = "solid"))+
+  theme(legend.position = "none", plot.margin = unit(c(0.01,0.01,0.01,0.01),"cm"),text = element_text(size = 5),axis.title = element_text(size = 5))+ geom_path(data = df_ell.gui.org.sev, aes(x = NMDS1, y = NMDS2, group = Severity,colour=Severity),size=0.25)+ theme(axis.text.x = element_blank(),axis.text.y = element_blank(),axis.ticks = element_blank())+scale_color_manual(values = c("cornflowerblue","chocolate","orange1","firebrick3","tomato4","black"))+ scale_fill_manual(values = c("cornflowerblue","lightgoldenrod1","orange1","firebrick3","tomato4","black"))+scale_shape_manual(values = c(21,22,23,24))+geom_segment(data = gui.org.sig.spp.scrs, aes(x = 0, xend=NMDS1, y=0, yend=NMDS2), arrow = arrow(length = unit(0.10, "cm")), colour = "grey10", lwd=0.3) + #add vector arrows of significant species
+  ggrepel::geom_text_repel(data = gui.org.sig.spp.scrs, aes(x=NMDS1, y=NMDS2, label = Species), cex = 2.5, direction = "both", segment.size = 0.20)#+geom_text(aes(label=rownames(gui.org.site.scrs)),hjust=0, vjust=0)
+
+nmds.plot.gui.org
+
+#plot the date ellipses ----
+
+#organic
+df_ell.org.date <- data.frame() #sets up a data frame before running the function.
+for(g in levels(gui.org.site.scrs$Sample_Date)){
+  df_ell.org.date <- rbind(df_ell.org.date, cbind(as.data.frame(with(gui.org.site.scrs [gui.org.site.scrs$Sample_Date==g,],
+                                                         veganCovEllipse(cov.wt(cbind(NMDS1,NMDS2),wt=rep(1/length(NMDS1),length(NMDS1)))$cov,center=c(mean(NMDS1),mean(NMDS2))))) ,Sample_Date=g))
+}
+NMDS.mean.org.date=aggregate(gui.org.site.scrs[ ,c("NMDS1", "NMDS2")], 
+                         list(group = gui.org.site.scrs$Sample_Date), mean)
+
+
+nmds.plot.org.date <- ggplot(gui.org.site.scrs, aes(x=NMDS1, y=NMDS2))+ #sets up the plot
+  geom_point(aes(NMDS1, NMDS2, colour = factor(gui.org.site.scrs$Severity),fill = factor(gui.org.site.scrs$Severity), shape = factor(gui.org.site.scrs$Sample_Date)), cex = 1)+
+  coord_fixed()+
+  labs(subtitle = "Surface",cex=0.5)+
+  theme_classic()+ 
+  theme(panel.background = element_rect(fill = NA, colour = "black", size = 0.5, linetype = "solid"))+
+  theme(legend.position = "right",text = element_text(size = 5),legend.spacing.y = unit(0.001,"cm"),legend.key.size =  unit(0.5,"cm"),legend.margin = unit(0,"cm"),legend.title = element_blank(),legend.text = element_text(size = 4),plot.margin = unit(c(0.01,0.01,0.01,0.01),"cm"), axis.title = element_text(size = 5))+ geom_path(data = df_ell.org.date, aes(x = NMDS1, y = NMDS2, group = Sample_Date),size=0.25)+ theme(axis.text.x = element_blank(),axis.text.y = element_blank(),axis.ticks = element_blank())+scale_color_manual(values = c("cornflowerblue","chocolate","orange1","firebrick3","tomato4","black"))+ scale_fill_manual(values = c("cornflowerblue","lightgoldenrod1","orange1","firebrick3","tomato4","black"))+scale_shape_manual(values = c(21,22,23,24))+guides(fill=guide_legend(byrow = TRUE,override.aes = list(color=c("cornflowerblue","lightgoldenrod1","orange1","firebrick3","tomato4"),cex=1.5)))+geom_segment(data = gui.org.sig.spp.scrs, aes(x = 0, xend=NMDS1, y=0, yend=NMDS2), arrow = arrow(length = unit(0.10, "cm")), colour = "grey10", lwd=0.3) + #add vector arrows of significant species
+  ggrepel::geom_text_repel(data = gui.org.sig.spp.scrs, aes(x=NMDS1, y=NMDS2, label = Species), cex = 2.5, direction = "both", segment.size = 0.20)+
+  annotate("text",x=0.95,y=0.25,label="September",size=2)+
+  annotate("text",x=0.3,y=-0.45,label="October",size=2)+
+  annotate("text",x=-0.58,y=0.0,label="May",size=2)+
+  annotate("text",x=-.38,y=0.2,label="June",size=2)
+nmds.plot.org.date
+
+
+#mineral 
+df_ell.min.date <- data.frame() #sets up a data frame before running the function.
+for(g in levels(gui.min.site.scrs$Sample_Date)){
+  df_ell.min.date <- rbind(df_ell.min.date, cbind(as.data.frame(with(gui.min.site.scrs [gui.min.site.scrs$Sample_Date==g,],
+                                                         veganCovEllipse(cov.wt(cbind(NMDS1,NMDS2),wt=rep(1/length(NMDS1),length(NMDS1)))$cov,center=c(mean(NMDS1),mean(NMDS2))))) ,Sample_Date=g))
+}
+NMDS.mean.min=aggregate(gui.min.site.scrs[ ,c("NMDS1", "NMDS2")], 
+                         list(group = gui.min.site.scrs$Sample_Date), mean)
+
+nmds.plot.min.date <- ggplot(gui.min.site.scrs, aes(x=NMDS1, y=NMDS2))+ #sets up the plot
+  geom_point(aes(NMDS1, NMDS2, colour = factor(gui.min.site.scrs$Severity), shape = factor(gui.min.site.scrs$Sample_Date),fill = factor(gui.min.site.scrs$Severity)), cex = 1)+
+  coord_fixed()+
+  labs(subtitle = "Mineral")+
+  theme_classic()+ 
+  theme(panel.background = element_rect(fill = NA, colour = "black", size = 0.5, linetype = "solid"))+
+  theme(legend.position = "none",plot.margin = unit(c(0.01,0.01,0.01,0.01),"cm"), text = element_text(size = 5),axis.title = element_text(size = 5))+ geom_path(data = df_ell.min.date, aes(x = NMDS1, y = NMDS2, group = Sample_Date),size=0.25)+ theme(axis.text.x = element_blank(),axis.text.y = element_blank(),axis.ticks = element_blank(),axis.title.y  = element_blank())+scale_color_manual(values = c("cornflowerblue","chocolate","orange1","firebrick3","tomato4","black"))+ scale_fill_manual(values = c("cornflowerblue","lightgoldenrod1","orange1","firebrick3","tomato4","black"))+scale_shape_manual(values = c(21,22,23,24))+geom_segment(data = gui.min.sig.spp.scrs, aes(x = 0, xend=NMDS1, y=0, yend=NMDS2), arrow = arrow(length = unit(0.1, "cm")), colour = "grey10", lwd=0.3) + #add vector arrows of significant species
+  ggrepel::geom_text_repel(data = gui.min.sig.spp.scrs, aes(x=NMDS1, y=NMDS2, label = Species), cex = 2.5, direction = "both", segment.size = 0.20)+
+  annotate("text",x=-.25,y=0.35,label="September",size=2)+
+  annotate("text",x=-.58,y=-0.04,label="October",size=2)+
+  annotate("text",x=-0.02,y=0.2,label="May",size=2)+
+  annotate("text",x=.12,y=-0.35,label="June",size=2)
+nmds.plot.min.date
+
+#plot together
+tiff("nmds.fun.apr13.2023.tiff",res = 1000,width = 5512,height = 4000,units = "px")
+nmds.plot.gui.org+nmds.plot.org.date+nmds.plot.gui.min+nmds.plot.min.date+plot_annotation(tag_levels = "A")
+dev.off()
+
+#code adapted from https://www.rpubs.com/RGrieger/545184
+```
+#permanova of functional community
+```{r}
+
+#create bray dist matrix
+bray.dist.min.gui<-vegdist(psotu2veg(phylo.gui.mineral),method = "bray")
+bray.dist.org.gui<-vegdist(psotu2veg(phylo.gui.orgeral),method = "bray")
+
+
+#create meta.data of fall and spring data
+sd.min.gui<-as.data.frame(sample_data(phylo.gui.mineral))
+sd.org.gui<-as.data.frame(sample_data(phylo.gui.orgeral))
+class(sd.org.gui)<-NULL
+class(sd.min.gui)<-NULL
+sd.org.gui<-as.data.frame(sd.org.gui)
+sd.min.gui<-as.data.frame(sd.min.gui)
+
+#perform test 
+adonis.min.gui<- adonis2(psotu2veg(phylo.gui.mineral) ~ Severity * sample_date ,data = sd.min.gui, method= "bray")
+adonis.min.gui
+
+adonis.org.gui<-adonis2(psotu2veg(phylo.gui.orgeral) ~ Severity * sample_date, data = sd.org.gui, method = "bray")
+adonis.org.gui
+
+
+```
+
+#determine ecto vs sparo % change in richness
+```{r}
+set.diff.ecto<- mean(guild.df.prs.abs.4[which(guild.df.prs.abs.4$sample_date == "September" & guild.df.prs.abs.4$Severity == "Unburnt" & guild.df.prs.abs.4$sample_type == "Mineral"),]$Ectomycorrhizal)-mean(guild.df.prs.abs.4[which(guild.df.prs.abs.4$sample_date == "September" & guild.df.prs.abs.4$Severity == "Severe"& guild.df.prs.abs.4$sample_type == "Mineral"),]$Ectomycorrhizal)
+perc.change<-set.diff.ecto/mean(guild.df.prs.abs.4[which(guild.df.prs.abs.4$sample_date == "September" & guild.df.prs.abs.4$Severity == "Unburnt" & guild.df.prs.abs.4$sample_type == "Mineral"),]$Ectomycorrhizal)
+
+set.diff.sapro<- mean(guild.df.prs.abs.4[which(guild.df.prs.abs.4$sample_date == "September" & guild.df.prs.abs.4$Severity == "Unburnt" & guild.df.prs.abs.4$sample_type == "Mineral"),]$Saprotroph)-mean(guild.df.prs.abs.4[which(guild.df.prs.abs.4$sample_date == "September" & guild.df.prs.abs.4$Severity == "Severe"& guild.df.prs.abs.4$sample_type == "Mineral"),]$Saprotroph)
+perc.change.sapro<-set.diff.sapro/mean(guild.df.prs.abs.4[which(guild.df.prs.abs.4$sample_date == "September" & guild.df.prs.abs.4$Severity == "Unburnt" & guild.df.prs.abs.4$sample_type == "Mineral"),]$Saprotroph)
+
+#61.8 % loss is ecto and only 42.2 % change in sapro - september ub to sev in mineral 
+
+set.diff.ecto<- mean(guild.df.prs.abs.4[which(guild.df.prs.abs.4$sample_date == "September" & guild.df.prs.abs.4$Severity == "Unburnt" & guild.df.prs.abs.4$sample_type == "Surface"),]$Ectomycorrhizal)-mean(guild.df.prs.abs.4[which(guild.df.prs.abs.4$sample_date == "September" & guild.df.prs.abs.4$Severity == "Severe"& guild.df.prs.abs.4$sample_type == "Surface"),]$Ectomycorrhizal)
+perc.change<-set.diff.ecto/mean(guild.df.prs.abs.4[which(guild.df.prs.abs.4$sample_date == "September" & guild.df.prs.abs.4$Severity == "Unburnt" & guild.df.prs.abs.4$sample_type == "Surface"),]$Ectomycorrhizal)
+
+set.diff.sapro<- mean(guild.df.prs.abs.4[which(guild.df.prs.abs.4$sample_date == "September" & guild.df.prs.abs.4$Severity == "Unburnt" & guild.df.prs.abs.4$sample_type == "Surface"),]$Saprotroph)-mean(guild.df.prs.abs.4[which(guild.df.prs.abs.4$sample_date == "September" & guild.df.prs.abs.4$Severity == "Severe"& guild.df.prs.abs.4$sample_type == "Surface"),]$Saprotroph)
+perc.change.sapro<-set.diff.sapro/mean(guild.df.prs.abs.4[which(guild.df.prs.abs.4$sample_date == "September" & guild.df.prs.abs.4$Severity == "Unburnt" & guild.df.prs.abs.4$sample_type == "Surface"),]$Saprotroph)
+
+#95.0% % loss is ecto and only 90.6 % change in sapro - september ub to sev in surface
+
+set.diff.ecto<- mean(guild.df.prs.abs.4[which(guild.df.prs.abs.4$sample_date == "October" & guild.df.prs.abs.4$Severity == "Unburnt" & guild.df.prs.abs.4$sample_type == "Mineral"),]$Ectomycorrhizal)-mean(guild.df.prs.abs.4[which(guild.df.prs.abs.4$sample_date == "October" & guild.df.prs.abs.4$Severity == "Severe"& guild.df.prs.abs.4$sample_type == "Mineral"),]$Ectomycorrhizal)
+perc.change<-set.diff.ecto/mean(guild.df.prs.abs.4[which(guild.df.prs.abs.4$sample_date == "October" & guild.df.prs.abs.4$Severity == "Unburnt" & guild.df.prs.abs.4$sample_type == "Mineral"),]$Ectomycorrhizal)
+
+set.diff.sapro<- mean(guild.df.prs.abs.4[which(guild.df.prs.abs.4$sample_date == "October" & guild.df.prs.abs.4$Severity == "Unburnt" & guild.df.prs.abs.4$sample_type == "Mineral"),]$Saprotroph)-mean(guild.df.prs.abs.4[which(guild.df.prs.abs.4$sample_date == "October" & guild.df.prs.abs.4$Severity == "Severe"& guild.df.prs.abs.4$sample_type == "Mineral"),]$Saprotroph)
+perc.change.sapro<-set.diff.sapro/mean(guild.df.prs.abs.4[which(guild.df.prs.abs.4$sample_date == "October" & guild.df.prs.abs.4$Severity == "Unburnt" & guild.df.prs.abs.4$sample_type == "Mineral"),]$Saprotroph)
+
+#59.6 % loss is ecto and only 36.4 % change in sapro - october ub to sev in mineral
+
+set.diff.ecto<- mean(guild.df.prs.abs.4[which(guild.df.prs.abs.4$sample_date == "October" & guild.df.prs.abs.4$Severity == "Unburnt" & guild.df.prs.abs.4$sample_type == "Surface"),]$Ectomycorrhizal)-mean(guild.df.prs.abs.4[which(guild.df.prs.abs.4$sample_date == "October" & guild.df.prs.abs.4$Severity == "Severe"& guild.df.prs.abs.4$sample_type == "Surface"),]$Ectomycorrhizal)
+perc.change<-set.diff.ecto/mean(guild.df.prs.abs.4[which(guild.df.prs.abs.4$sample_date == "October" & guild.df.prs.abs.4$Severity == "Unburnt" & guild.df.prs.abs.4$sample_type == "Surface"),]$Ectomycorrhizal)
+
+set.diff.sapro<- mean(guild.df.prs.abs.4[which(guild.df.prs.abs.4$sample_date == "October" & guild.df.prs.abs.4$Severity == "Unburnt" & guild.df.prs.abs.4$sample_type == "Surface"),]$Saprotroph)-mean(guild.df.prs.abs.4[which(guild.df.prs.abs.4$sample_date == "October" & guild.df.prs.abs.4$Severity == "Severe"& guild.df.prs.abs.4$sample_type == "Surface"),]$Saprotroph)
+perc.change.sapro<-set.diff.sapro/mean(guild.df.prs.abs.4[which(guild.df.prs.abs.4$sample_date == "October" & guild.df.prs.abs.4$Severity == "Unburnt" & guild.df.prs.abs.4$sample_type == "Surface"),]$Saprotroph)
+
+#90.5 % loss is ecto and only 28.0 % change in sapro - octover ub to sev in surface
+
+set.diff.ecto<- mean(guild.df.prs.abs.4[which(guild.df.prs.abs.4$sample_date == "May" & guild.df.prs.abs.4$Severity == "Unburnt" & guild.df.prs.abs.4$sample_type == "Mineral"),]$Ectomycorrhizal)-mean(guild.df.prs.abs.4[which(guild.df.prs.abs.4$sample_date == "May" & guild.df.prs.abs.4$Severity == "Severe"& guild.df.prs.abs.4$sample_type == "Mineral"),]$Ectomycorrhizal)
+perc.change<-set.diff.ecto/mean(guild.df.prs.abs.4[which(guild.df.prs.abs.4$sample_date == "May" & guild.df.prs.abs.4$Severity == "Unburnt" & guild.df.prs.abs.4$sample_type == "Mineral"),]$Ectomycorrhizal)
+
+set.diff.sapro<- mean(guild.df.prs.abs.4[which(guild.df.prs.abs.4$sample_date == "May" & guild.df.prs.abs.4$Severity == "Unburnt" & guild.df.prs.abs.4$sample_type == "Mineral"),]$Saprotroph)-mean(guild.df.prs.abs.4[which(guild.df.prs.abs.4$sample_date == "May" & guild.df.prs.abs.4$Severity == "Severe"& guild.df.prs.abs.4$sample_type == "Mineral"),]$Saprotroph)
+perc.change.sapro<-set.diff.sapro/mean(guild.df.prs.abs.4[which(guild.df.prs.abs.4$sample_date == "May" & guild.df.prs.abs.4$Severity == "Unburnt" & guild.df.prs.abs.4$sample_type == "Mineral"),]$Saprotroph)
+
+#46.6 % loss is ecto and only +17.4 % change in sapro - May ub to sev in mineral
+
+set.diff.ecto<- mean(guild.df.prs.abs.4[which(guild.df.prs.abs.4$sample_date == "May" & guild.df.prs.abs.4$Severity == "Unburnt" & guild.df.prs.abs.4$sample_type == "Surface"),]$Ectomycorrhizal)-mean(guild.df.prs.abs.4[which(guild.df.prs.abs.4$sample_date == "May" & guild.df.prs.abs.4$Severity == "Severe"& guild.df.prs.abs.4$sample_type == "Surface"),]$Ectomycorrhizal)
+perc.change<-set.diff.ecto/mean(guild.df.prs.abs.4[which(guild.df.prs.abs.4$sample_date == "May" & guild.df.prs.abs.4$Severity == "Unburnt" & guild.df.prs.abs.4$sample_type == "Surface"),]$Ectomycorrhizal)
+
+set.diff.sapro<- mean(guild.df.prs.abs.4[which(guild.df.prs.abs.4$sample_date == "May" & guild.df.prs.abs.4$Severity == "Unburnt" & guild.df.prs.abs.4$sample_type == "Surface"),]$Saprotroph)-mean(guild.df.prs.abs.4[which(guild.df.prs.abs.4$sample_date == "May" & guild.df.prs.abs.4$Severity == "Severe"& guild.df.prs.abs.4$sample_type == "Surface"),]$Saprotroph)
+perc.change.sapro<-set.diff.sapro/mean(guild.df.prs.abs.4[which(guild.df.prs.abs.4$sample_date == "May" & guild.df.prs.abs.4$Severity == "Unburnt" & guild.df.prs.abs.4$sample_type == "Surface"),]$Saprotroph)
+
+#79.3 % loss is ecto and only 15.9 % change in sapro - may ub to sev in surface
+
+set.diff.ecto<- mean(guild.df.prs.abs.4[which(guild.df.prs.abs.4$sample_date == "June" & guild.df.prs.abs.4$Severity == "Unburnt" & guild.df.prs.abs.4$sample_type == "Mineral"),]$Ectomycorrhizal)-mean(guild.df.prs.abs.4[which(guild.df.prs.abs.4$sample_date == "June" & guild.df.prs.abs.4$Severity == "Severe"& guild.df.prs.abs.4$sample_type == "Mineral"),]$Ectomycorrhizal)
+perc.change<-set.diff.ecto/mean(guild.df.prs.abs.4[which(guild.df.prs.abs.4$sample_date == "June" & guild.df.prs.abs.4$Severity == "Unburnt" & guild.df.prs.abs.4$sample_type == "Mineral"),]$Ectomycorrhizal)
+
+set.diff.sapro<- mean(guild.df.prs.abs.4[which(guild.df.prs.abs.4$sample_date == "June" & guild.df.prs.abs.4$Severity == "Unburnt" & guild.df.prs.abs.4$sample_type == "Mineral"),]$Saprotroph)-mean(guild.df.prs.abs.4[which(guild.df.prs.abs.4$sample_date == "June" & guild.df.prs.abs.4$Severity == "Severe"& guild.df.prs.abs.4$sample_type == "Mineral"),]$Saprotroph)
+perc.change.sapro<-set.diff.sapro/mean(guild.df.prs.abs.4[which(guild.df.prs.abs.4$sample_date == "June" & guild.df.prs.abs.4$Severity == "Unburnt" & guild.df.prs.abs.4$sample_type == "Mineral"),]$Saprotroph)
+
+#70.1 % loss is ecto and only 14.6 % change in sapro - june ub to sev in mineral
+
+set.diff.ecto<- mean(guild.df.prs.abs.4[which(guild.df.prs.abs.4$sample_date == "June" & guild.df.prs.abs.4$Severity == "Unburnt" & guild.df.prs.abs.4$sample_type == "Surface"),]$Ectomycorrhizal)-mean(guild.df.prs.abs.4[which(guild.df.prs.abs.4$sample_date == "June" & guild.df.prs.abs.4$Severity == "Severe"& guild.df.prs.abs.4$sample_type == "Surface"),]$Ectomycorrhizal)
+perc.change<-set.diff.ecto/mean(guild.df.prs.abs.4[which(guild.df.prs.abs.4$sample_date == "June" & guild.df.prs.abs.4$Severity == "Unburnt" & guild.df.prs.abs.4$sample_type == "Surface"),]$Ectomycorrhizal)
+
+set.diff.sapro<- mean(guild.df.prs.abs.4[which(guild.df.prs.abs.4$sample_date == "June" & guild.df.prs.abs.4$Severity == "Unburnt" & guild.df.prs.abs.4$sample_type == "Surface"),]$Saprotroph)-mean(guild.df.prs.abs.4[which(guild.df.prs.abs.4$sample_date == "June" & guild.df.prs.abs.4$Severity == "Severe"& guild.df.prs.abs.4$sample_type == "Surface"),]$Saprotroph)
+perc.change.sapro<-set.diff.sapro/mean(guild.df.prs.abs.4[which(guild.df.prs.abs.4$sample_date == "June" & guild.df.prs.abs.4$Severity == "Unburnt" & guild.df.prs.abs.4$sample_type == "Surface"),]$Saprotroph)
+
+#90.0 % loss is ecto and only 53.7 % change in sapro - june ub to sev in surface
+```
+
+
+#visualize relative abundance of guilds
+```{r}
+#first add the total reads to the guild.df 
+guild.df$total_reads<-sampling.depth[match(rownames(guild.df),rownames(sampling.depth)),]$totalreads
+guild.df
+
+#first lets check the total percent per sample identified to a guild included here
+perc.iden<-rowSums(guild.df[,c(1:12)])/guild.df$total_reads #83% total
+#79.9% average
+#30% min
+#99.9%
+
+guild.df.rel<-cbind(guild.df[,c(1:12)]/guild.df$total_reads,guild.df[,13:ncol(guild.df)])
+colnames(guild.df.rel)<-colnames(guild.df)
+
+#plot
+#convert to relative abundance for guilds
+guild.long.sev <- melt(guild.df.rel[,c(1:12,15)], id.vars = "Severity", variable.name = "Guild")
+guild.long.date <- melt(guild.df.rel[,c(1:12,14)], id.vars = "sample_date", variable.name = "Guild")
+guild.long.layer <- melt(guild.df.rel[,c(1:12,13)], id.vars = "sample_type", variable.name = "Guild")
+
+#but what I really want is means of the relative abundance
+guild.mean.relabun.sev<-guild.long.sev %>% group_by(Severity,Guild )%>%summarise(mean = mean(value),sd=sd(value))
+guild.mean.relabun.date<-guild.long.date %>% group_by(sample_date,Guild )%>%summarise(mean = mean(value))
+guild.mean.relabun.layer<-guild.long.layer %>% group_by(sample_type,Guild )%>%summarise(mean = mean(value))
+
+guild.mean.relabun.sev$upper<-guild.mean.relabun.sev$mean+guild.mean.relabun.sev$sd
+guild.mean.relabun.sev$lower<-guild.mean.relabun.sev$mean+guild.mean.relabun.sev$sd
+
+
+#plot guild
+guild.bar.sev<-ggplot(guild.mean.relabun.sev, aes(x = Severity, y = mean, fill = `Guild`)) + 
+    geom_bar(stat = "identity")+theme_classic()+labs(y="Mean relative abundance")+scale_fill_manual(values = c("yellowgreen","olivedrab","lightskyblue","darkseagreen","darkslategray2","gray25","steelblue3","yellow3","orangered3","darkorange3","indianred3","lightpink1"))+theme(axis.text = element_text(size=6),axis.title = element_text(size = 6),legend.title = element_text(size=6),legend.key.size = unit(0.3,"cm"),legend.text = element_text(size=4))
+guild.bar.sev
+
+guild.bar.date<-ggplot(guild.mean.relabun.date, aes(x = sample_date, y = mean, fill = `Guild`)) + 
+    geom_bar(stat = "identity")+theme_classic()+theme(legend.position = "none",axis.title.x = element_text("Sample Date"))+labs(y="Mean relative abundance")
+
+guild.bar.type<-ggplot(guild.mean.relabun.layer, aes(x = sample_type, y = mean, fill = `Guild`)) + 
+    geom_bar(stat = "identity")+theme_classic()+theme(axis.title.x = element_text("Sample Layer"))+labs(y="Mean relative abundance")
+
+guild.bar.sev+guild.bar.date+guild.bar.type
+
+guild.bar.sev
+ggsave("guild.relabun.mar9.2023.tiff",dpi = 1000,width = 3543,height = 3800,units = "px")
+```
+
+
+#guild richness
+#create pres.abs / richness for guilds
+```{r}
+#turn from OTU/ASV abundance to OTU/ASV presence absence 
+guild.prs.abs<-Funguild.1[,-which(grepl("ock",colnames(Funguild.1)))] #remove mock 
+guild.prs.abs<-guild.prs.abs[,-c(72:87)]
+guild.prs.abs<-guild.prs.abs[,-c(1,130:141)]
+
+guild.prs.abs[guild.prs.abs>0]<-1
+
+guild.prs.abs<-as.data.frame(cbind(guild.prs.abs,Funguild.1[,c(1,152:163)]))#add back metadata
+
+guild.prs.abs.3<-aggregate(guild.prs.abs[,c(1:128)], guild.prs.abs["Guild.3"],FUN=sum)
+guild.prs.abs.3<-t(guild.prs.abs.3)
+colnames(guild.prs.abs.3)<-guild.prs.abs.3[1,]
+guild.prs.abs.3<-as.data.frame(guild.prs.abs.3[-1,])
+guild.prs.abs.3<-lapply(guild.prs.abs.3,as.numeric)
+guild.prs.abs.3<-cbind(guild.prs.abs.3,meta.data.microplots)
+
+```
+
+##make guild groups with no combination categories 
+```{r}
+#5: same guild/groups as type 4 except I should remove the joint categories by adding the number of reads/species to each of the unique category----- for multivariate analysis
+#example ecto/sapro = 412, ecto = 120, sapro = 400. following adjustments, no ecto/sapro, ecto =532, sapro = 812 
+#new dataset
+guild.df.prs.abs.4<-guild.prs.abs.3
+
+#add reads from other categories
+guild.df.prs.abs.4$Ectomycorrhizal<- guild.df.prs.abs.4$Ectomycorrhizal+ guild.df.prs.abs.4$`Pathotroph-Ectomycorrhizal` + guild.df.prs.abs.4$`Saprotroph-Ectomycorrhizal`
+
+guild.df.prs.abs.4$Symbiotroph<- guild.df.prs.abs.4$Symbiotroph+guild.df.prs.abs.4$`Pathotroph-Saprotroph-Symbiotroph`+guild.df.prs.abs.4$`Pathotroph-Symbiotroph`+guild.df.prs.abs.4$`Saprotroph-Symbiotroph`
+
+guild.df.prs.abs.4$Pathotroph<-guild.df.prs.abs.4$`Pathotroph-Ectomycorrhizal`+guild.df.prs.abs.4$`Pathotroph-Saprotroph`+guild.df.prs.abs.4$`Pathotroph-Saprotroph-Symbiotroph`+guild.df.prs.abs.4$`Pathotroph-Symbiotroph`+guild.df.prs.abs.4$Pathotroph
+
+guild.df.prs.abs.4$Saprotroph<-guild.df.prs.abs.4$Saprotroph+guild.df.prs.abs.4$`Saprotroph-Ectomycorrhizal`+guild.df.prs.abs.4$`Pathotroph-Saprotroph`+guild.df.prs.abs.4$`Pathotroph-Saprotroph-Symbiotroph`+guild.df.prs.abs.4$`Saprotroph-Symbiotroph`
+
+
+#remove combo columns
+guild.df.prs.abs.4<- guild.df.prs.abs.4[,c(-1,-4,-5,-7,-8,-9,-11)]
+```
+
+
+##plot means onto functional guild figures 
+```{r}
+pointshape<-c(rep(16,5),rep(17,5)) #set point shape for means
+
+#ecto subplots ----
+##ecto -date
+ecto.date<-ggplot(guild.df.prs.abs.4) + #create base plot
+  geom_jitter(aes(x = Severity, y = Ectomycorrhizal,color=sample_date,shape=sample_type),position=position_dodge(0.6),size=1.5,stroke=0.55)+ #scale_y_continuous(limits=c(0,33),breaks = seq(0,33,5)) +#add points
+  labs(x = "Severity", y = "Ectomycorrhizal guild richness") + #add axis labels
+  scale_color_manual(values = c("sienna2","sienna4","mediumaquamarine","blue4"))+ #manually colour points
+  scale_shape_manual(values = c(1,2))+ #manually provide open point shapes
+  theme_classic()+
+  theme(legend.position = "right",legend.key.size = unit(0.5,'cm'),plot.margin = unit(c(0.01,0.01,0.01,0.01),"cm"),legend.text = element_text(size = 7),legend.title = element_blank(),axis.text = element_text(size = 7),axis.title = element_text(size = 7))+ #place axis on the right hand side
+  stat_summary_bin(data= guild.df.prs.abs.4 ,aes(x = Severity, y = Ectomycorrhizal,color=sample_date,group=sample_date,shape=sample_type),fun.data="mean_se",fun.args = list(mult=1), geom="errorbar",width=0.8, position = position_dodge(0.6),size=0.25)+ #add the se of the mean 
+  stat_summary_bin(data= guild.df.prs.abs.4 ,aes(x = Severity, y = Ectomycorrhizal,color=sample_date,group=sample_date,shape=sample_type),fun ="mean",geom = "point", position = position_dodge(0.6),size=1,shape=8)+ 
+  stat_summary_bin(data= guild.df.prs.abs.4 ,aes(x = Severity, y = Ectomycorrhizal,shape=sample_type,group=sample_type,color=sample_date),fun.data="mean_se",fun.args = list(mult=1), geom="linerange",width=0.08, position = position_nudge(0.4),size=0.25)+
+  stat_summary_bin(data= guild.df.prs.abs.4 ,aes(x = Severity, y = Ectomycorrhizal,shape=sample_type,group=sample_type),shape=pointshape,fun ="mean",geom = "point", position = position_nudge(0.4),size=2)+
+  annotate("text",x=1,y=62.2,label="a",size=3)+
+  annotate("text",x=1,y=60.2,label="ab",size=3)+
+  annotate("text",x=2,y=62.2,label="a",size=3)+
+  annotate("text",x=2,y=60.2,label="a",size=3)+
+  annotate("text",x=3,y=62.2,label="b",size=3)+
+  annotate("text",x=3,y=60.2,label="bc",size=3)+
+  annotate("text",x=4,y=62.2,label="b",size=3)+
+  annotate("text",x=4,y=60.2,label="c",size=3)+
+  annotate("text",x=5,y=62.2,label="b",size=3)+
+  annotate("text",x=5,y=60.2,label="c",size=3)+
+  annotate("text",x=6,y=62.3,label="Surface",size=3)+
+  annotate("text",x=6,y=60.1,label="Mineral",size=3)+
+  annotate("text",x=3.5,y=18,label="*",size=6,colour="red")+
+  annotate("text",x=5.5,y=12,label="*",size=6,colour="red")+
+  coord_cartesian(clip = "off")
+ggsave("ecto.guirich.mar1.2023.tiff",units = "px",width = 9000,dpi = 1000)
+
+
+
+#patho subplots ----
+##patho -date
+patho.date.rich<-ggplot(guild.df.prs.abs.4) +
+  geom_point(aes(x = sample_date, y = Pathotroph,color=Severity,shape=sample_type),position=position_jitterdodge(dodge.width = 0.6, jitter.width = 0.3),size=2,stroke=1.5)+
+  labs(x = "Sample Date", y = "Pathotroph guild richness") +
+  theme_classic()+
+  scale_color_manual(values = c("cornflowerblue","gold","orange2","firebrick3","tomato4","black"))+
+  theme(legend.position = "right",legend.title = element_blank(),axis.text = element_text(size = 13))+
+  stat_summary_bin(data= guild.df.prs.abs.4 ,aes(x = sample_date, y = Pathotroph,color=sample_date,group=Severity,colour=Severity),fun.data="mean_se",fun.args = list(mult=1), geom="errorbar",width=0.1, position = position_dodge(0.6),size=0.5)+
+  stat_summary_bin(data= guild.df.prs.abs.4 ,aes(x = sample_date, y = Pathotroph,group=Severity,colour=Severity),fun ="mean",geom = "point", position = position_dodge(0.6),size=3,shape=8)+ # add the mean points 
+  stat_summary_bin(data= guild.df.prs.abs.4 ,aes(x = sample_date, y = Pathotroph,shape=sample_type,group=sample_type),fun.data="mean_se",fun.args = list(mult=1), geom="linerange",width=0.1, position = position_nudge(0.4),size=0.5)+
+  stat_summary_bin(data= guild.df.prs.abs.4 ,aes(x = sample_date, y = Pathotroph,shape=sample_type,group=sample_type),shape=pointshape.2,fun ="mean",geom = "point", position = position_nudge(0.4),size=4)+
+   annotate("text",x=1,y=100,label="a",size=5)+
+  annotate("text",x=2,y=100,label="b",size=5)+
+  annotate("text",x=3,y=100,label="b",size=5)+
+  annotate("text",x=4,y=100,label="b",size=5)
+  
+patho.date.rich
+ggsave("patho.guirich.bydate.mar1.2023.tiff",units = "px",width = 9000,dpi = 1000)
+
+
+#sapro subplots ----
+##sapro -date
+sapro.sev.rich<-ggplot(guild.df.prs.abs.4) + #create base plot
+  geom_point(aes(x = Severity, y = Saprotroph,color=sample_date,shape=sample_type),position=position_jitterdodge(dodge.width = 0.6, jitter.width = 0.3),size=1.5,stroke=0.55)+ #add points
+  labs(x = "Severity", y = "Saprotroph guild richness") + #add axis labels
+  scale_color_manual(values = c("sienna2","sienna4","mediumaquamarine","blue4"))+ #manually colour points
+  scale_shape_manual(values = c(1,2))+ #manually provide open point shapes
+  theme_classic()+
+  theme(legend.position = "right",legend.key.size = unit(0.5,'cm'),plot.margin = unit(c(0.01,0.01,0.01,0.01),"cm"),legend.text = element_text(size = 7),legend.title = element_blank(),axis.text = element_text(size = 7),axis.title = element_text(size = 7))+ #place axis on the right hand side
+  stat_summary_bin(data= guild.df.prs.abs.4 ,aes(x = Severity, y = Saprotroph,color=sample_date,group=sample_date,shape=sample_type),fun.data="mean_se",fun.args = list(mult=1), geom="errorbar",width=0.08, position = position_dodge(0.6),size=0.25)+ #add the se of the mean 
+  stat_summary_bin(data= guild.df.prs.abs.4 ,aes(x = Severity, y = Saprotroph,color=sample_date,group=sample_date,shape=sample_type),fun ="mean",geom = "point", position = position_dodge(0.6),size=1,shape=8)+ # add the mean points 
+  stat_summary_bin(data= guild.df.prs.abs.4 ,aes(x = Severity, y = Saprotroph,shape=sample_type,group=sample_type,color=sample_date),fun.data="mean_se",fun.args = list(mult=1), geom="linerange",width=0.08, position = position_nudge(0.4),size=0.25)+
+  stat_summary_bin(data= guild.df.prs.abs.4 ,aes(x = Severity, y = Saprotroph,shape=sample_type,group=sample_type),shape=pointshape,fun ="mean",geom = "point", position = position_nudge(0.4),size=2)+
+   annotate("text",x=1,y=160.2,label="a",size=3,color="sienna2")+
+  annotate("text",x=2,y=160.2,label="a",size=3,color="sienna2")+
+  annotate("text",x=3,y=160.2,label="ab",size=3,color="sienna2")+
+  annotate("text",x=4,y=160.2,label="ab",size=3,color="sienna2")+
+  annotate("text",x=5,y=160.2,label="b",size=3,color="sienna2")+
+ annotate("text",x=6,y=160.2,label="September",size=3,color="sienna2")+
+  coord_cartesian(clip = "off")
+sapro.sev.rich
+ggsave("sapro.guirich.mar1.2023.tiff",units = "px",width = 9000,dpi = 1000)
+  
+pointshape.2<-c(rep(16,4),rep(17,4))
+
+sapro.date.rich<-ggplot(guild.df.prs.abs.4) +
+  geom_point(aes(x = sample_date, y = Saprotroph,color=Severity,shape=sample_type),position=position_jitterdodge(dodge.width = 0.6, jitter.width = 0.3),size=2,stroke=1.5)+
+  labs(x = "Sample Date", y = "Saprotroph guild richness") +
+  theme_classic()+
+  scale_color_manual(values = c("cornflowerblue","gold","orange2","firebrick3","tomato4","black"))+
+  theme(legend.position = "right",legend.title = element_blank(),axis.text = element_text(size = 13))+
+  stat_summary_bin(data= guild.df.prs.abs.4 ,aes(x = sample_date, y = Saprotroph,color=sample_date,group=Severity,colour=Severity),fun.data="mean_se",fun.args = list(mult=1), geom="errorbar",width=0.1, position = position_dodge(0.6),size=0.5)+
+  stat_summary_bin(data= guild.df.prs.abs.4 ,aes(x = sample_date, y = Saprotroph,group=Severity,colour=Severity),fun ="mean",geom = "point", position = position_dodge(0.6),size=3,shape=8)+ # add the mean points 
+  stat_summary_bin(data= guild.df.prs.abs.4 ,aes(x = sample_date, y = Saprotroph,shape=sample_type,group=sample_type),fun.data="mean_se",fun.args = list(mult=1), geom="linerange",width=0.1, position = position_nudge(0.4),size=0.5)+
+  stat_summary_bin(data= guild.df.prs.abs.4 ,aes(x = sample_date, y = Saprotroph,shape=sample_type,group=sample_type),shape=pointshape.2,fun ="mean",geom = "point", position = position_nudge(0.4),size=4)+
+   annotate("text",x=4.5,y=60,label="*",size=10,color="red")+
+  annotate("text",x=1,y=160.2,label="a",size=5)+
+  annotate("text",x=2,y=160.2,label="a",size=5)+
+  annotate("text",x=3,y=160.2,label="a",size=5)+
+  annotate("text",x=4,y=160.2,label="a",size=5)+
+  annotate("text",x=1,y=164,label="a",size=5)+
+  annotate("text",x=2,y=164,label="b",size=5)+
+  annotate("text",x=3,y=164,label="b",size=5)+
+  annotate("text",x=4,y=164,label="b",size=5)
+ggsave("sapro.guirich.bydate.mar1.2023.tiff",units = "px",width = 9000,dpi = 1000)
+
+tiff("sapro.ecto.guirich.combo.mar20.2023.tiff",res = 1000,width = 5512,height = 7000,units = "px")
+ecto.date+sapro.sev.rich+plot_annotation(tag_levels = "A")+plot_layout(nrow = 2)
+dev.off()
+
+#symbio subplots ----
+##symbio -date
+ggplot(guild.df.prs.abs.4) + #create base plot
+  geom_point(aes(x = Severity, y = Symbiotroph,color=sample_date,shape=sample_type),position=position_dodge(0.6),size=2,stroke=1.5)+ #add points
+  labs(x = "Severity", y = "Symbiotroph guild richness") + #add axis labels
+  scale_color_manual(values = c("sienna2","sienna4","mediumaquamarine","blue4"))+ #manually colour points
+  scale_shape_manual(values = c(1,2))+ #manually provide open point shapes
+  theme_classic()+
+  theme(legend.position = "right",legend.title = element_blank(),axis.text = element_text(size = 13))+ #place axis on the right hand side
+  stat_summary_bin(data= guild.df.prs.abs.4 ,aes(x = Severity, y = Symbiotroph,color=sample_date,group=sample_date,shape=sample_type),fun.data="mean_se",fun.args = list(mult=1), geom="errorbar",width=0.1, position = position_dodge(0.6),size=0.5)+ #add the se of the mean 
+  stat_summary_bin(data= guild.df.prs.abs.4 ,aes(x = Severity, y = Symbiotroph,color=sample_date,group=sample_date,shape=sample_type),fun ="mean",geom = "point", position = position_dodge(0.6),size=2,shape=8) +# add the mean points 
+ stat_summary_bin(data= guild.df.prs.abs.4 ,aes(x = Severity, y = Symbiotroph,shape=sample_type,group=sample_type,color=sample_date),fun.data="mean_se",fun.args = list(mult=1), geom="linerange",width=0.1, position = position_nudge(0.4),size=0.5)+
+  stat_summary_bin(data= guild.df.prs.abs.4 ,aes(x = Severity, y = Symbiotroph,shape=sample_type,group=sample_type),shape=pointshape,fun ="mean",geom = "point", position = position_nudge(0.4),size=4)+
+  annotate("text",x=1.5,y=30,label="*",size=10,color="red")+
+   annotate("text",x=1,y=64,label="a",size=5)+
+  annotate("text",x=1,y=62.2,label="a",size=5)+
+  annotate("text",x=2,y=64,label="a",size=5)+
+  annotate("text",x=2,y=62.2,label="ab",size=5)+
+  annotate("text",x=3,y=64,label="bc",size=5)+
+  annotate("text",x=3,y=62.2,label="ab",size=5)+
+  annotate("text",x=4,y=64,label="c",size=5)+
+  annotate("text",x=4,y=62.2,label="ab",size=5)+
+  annotate("text",x=5,y=64,label="c",size=5)+
+  annotate("text",x=5,y=62.2,label="b",size=5)
+ggsave("symbio.guirich.bysev.mar1.2023.tiff",units = "px",width = 9000,dpi = 1000)
+
+#yeast subplots ----
+
+yeast.date.rich<-ggplot(guild.df.prs.abs.4) +
+  geom_point(aes(x = sample_date, y = `Yeast/Mould`,color=Severity,shape=sample_type),position=position_jitterdodge(dodge.width = 0.6, jitter.width = 0.3),size=2,stroke=1.5)+
+  labs(x = "Sample Date", y = "Yeast/Mould guild richness") +
+  theme_classic()+
+  scale_color_manual(values = c("cornflowerblue","gold","orange2","firebrick3","tomato4","black"))+
+  theme(legend.position = "right",legend.title = element_blank(),axis.text = element_text(size = 13))+
+  stat_summary_bin(data= guild.df.prs.abs.4 ,aes(x = sample_date, y = `Yeast/Mould`,color=sample_date,group=Severity,colour=Severity),fun.data="mean_se",fun.args = list(mult=1), geom="errorbar",width=0.1, position = position_dodge(0.6),size=0.5)+
+  stat_summary_bin(data= guild.df.prs.abs.4 ,aes(x = sample_date, y = `Yeast/Mould`,group=Severity,colour=Severity),fun ="mean",geom = "point", position = position_dodge(0.6),size=3,shape=8)+ # add the mean points 
+  stat_summary_bin(data= guild.df.prs.abs.4 ,aes(x = sample_date, y = `Yeast/Mould`,shape=sample_type,group=sample_type),fun.data="mean_se",fun.args = list(mult=1), geom="linerange",width=0.1, position = position_nudge(0.4),size=0.5)+
+  stat_summary_bin(data= guild.df.prs.abs.4 ,aes(x = sample_date, y = `Yeast/Mould`,shape=sample_type,group=sample_type),shape=pointshape.2,fun ="mean",geom = "point", position = position_nudge(0.4),size=4)+
+   annotate("text",x=1,y=165,label="a",size=5)+
+  annotate("text",x=2,y=165,label="b",size=5)+
+  annotate("text",x=3,y=165,label="b",size=5)+
+  annotate("text",x=4,y=165,label="b",size=5)
+yeast.date.rich
+ggsave("yeasy.guirich.bydate.mar4.2023.tiff",units = "px",width = 9000,dpi = 1000)
+
+
+
+```
+
+#GLM of functional guild richness
+```{r}
+#generalized linear models with possion/quasi distribution for count data 
+set.seed(43)
+
+
+#test with quasi to see if dispersion is okay 
+z.symbio<-glm(Symbiotroph~Severity*sample_date*sample_type,family = quasipoisson(link = "log"),data = guild.df.prs.abs.4)
+summary(z.symbio)
+anova(z.symbio, test = "F")
+emmeans(z.symbio,specs = pairwise ~Severity,data=guild.df.prs.abs.4,type="response")
+emmeans(z.symbio,specs = pairwise ~sample_type,data=guild.df.prs.abs.4,type="response")
+emmeans(z.symbio,specs = pairwise~Severity*sample_type,data=guild.df.prs.abs.4,type="response")
+
+outlierTest(z.symbio)
+
+
+z.ecto<-glm(Ectomycorrhizal~Severity*sample_date*sample_type,family = quasipoisson(link = "log"),data = guild.df.prs.abs.4)
+summary(z.ecto)
+anova(z.ecto,test="F")
+emmeans(z.ecto,specs = pairwise ~Severity,data=guild.df.prs.abs.4,type="response")
+emmeans(z.ecto, specs = pairwise ~sample_date,data=guild.df.prs.abs.4,type="response")
+emmeans(z.ecto, specs = pairwise ~sample_type,data=guild.df.prs.abs.4,type="response")
+emmeans(z.ecto, specs = pairwise ~Severity *sample_type,data=guild.df.prs.abs.4,type="response")
+
+outlierTest(z.ecto)
+
+
+z.patho<-glm(Pathotroph~Severity*sample_date*sample_type,family = quasipoisson(link = "log"),data = guild.df.prs.abs.4)
+emmeans(z.patho,specs = pairwise ~Severity,data=guild.df.prs.abs.4,type="response")
+emmeans(z.patho, specs = pairwise ~sample_date,data=guild.df.prs.abs.4,type="response")
+emmeans(z.patho, specs = pairwise ~sample_type,data=guild.df.prs.abs.4,type="response")
+emmeans(z.patho, specs = pairwise ~Severity*sample_date,data=guild.df.prs.abs.4,type="response")
+summary(z.patho)
+anova(z.patho,test = "F")
+
+outlierTest(z.patho)
+
+
+z.sapro<-glm(Saprotroph~Severity*sample_date*sample_type,family = quasipoisson(link = "log"),data = guild.df.prs.abs.4)
+summary(z.sapro)
+
+outlierTest(z.sapro)
+#no outliers 
+emmeans(z.sapro,specs = pairwise ~Severity,data=guild.df.prs.abs.4,type="response")
+emmeans(z.sapro, specs = pairwise ~sample_date,data=guild.df.prs.abs.4,type="response")
+emmeans(z.sapro, specs = pairwise ~sample_type,data=guild.df.prs.abs.4,type="response")
+emmeans(z.sapro, specs = pairwise ~Severity*sample_date,data=guild.df.prs.abs.4,type="response")
+emmeans(z.sapro, specs = pairwise ~sample_date*sample_type,data=guild.df.prs.abs.4,type="response")
+summary(z.sapro)
+anova(z.sapro,test="F")
+
+z.yeast<-glm(`Yeast/Mould` ~ Severity * sample_date * sample_type, family = quasipoisson(link = "log"),data=guild.df.prs.abs.4)
+summary(z.yeast)
+anova(z.yeast,test = "F")
+emmeans(z.yeast,specs = pairwise ~Severity,data=guild.df.prs.abs.4,type="response")
+emmeans(z.yeast, specs = pairwise ~sample_date,data=guild.df.prs.abs.4,type="response")
+emmeans(z.yeast, specs = pairwise ~sample_type,data=guild.df.prs.abs.4,type="response")
+emmeans(z.yeast, specs = pairwise ~Severity*sample_date,data=guild.df.prs.abs.4,type="response")
+
+
+```
+
+#indicator analysis
+```{r}
+set.seed(30)
+
+var2<-meta.data.microplots$Severity
+
+##trying with indval.g - sev
+indic.sev<-multipatt(as.matrix(psotu2veg(phylo.wolp.10)),var2, func = "indval.g", control = how(nperm = 999))
+sink(file = "indic.sum.text.txt")+summary(indic.sev)+sink(NULL)
+
+```
+
+#LP-sev vs SEV
+```{r}
+a.div.measures<-estimate_richness(phylo, measures = c("Shannon","Simpson")) #get the measures of shannon and simpson 
+
+
+#bind shannon and simpsom to meta data
+meta.data.microplots.lp<-sample_data(phylo)
+meta.data.microplots.lp<-cbind(meta.data.microplots.lp,a.div.measures)
+
+meta.data.lp.sev.sev<-dplyr::filter(meta.data.microplots.lp, Severity == "LP-Severe"|Severity =="Severe")
+meta.data.lp.sev.sev<-dplyr::filter(meta.data.lp.sev.sev, sample_date == "May"|sample_date =="June")
+
+sev.shan.div<-ggplot(meta.data.lp.sev.sev, aes(x = Severity, y = Shannon,color=sample_date,shape=sample_type)) +
+     geom_jitter(position= position_dodge(0.6),size=3)+scale_shape_manual(values=c(1, 2))+
+    labs(x = "Severity", y = "Shannon-Wiener Diversity Index") + 
+    theme_classic()+scale_color_manual(values = c("lightskyblue","blue4"))
+
+##try including sample type as factor
+#test heteroscadasity
+leveneTest(Simpson~Severity, data=meta.data.lp.sev.sev)
+leveneTest(Shannon~Severity, data=meta.data.lp.sev.sev)
+leveneTest(Simpson~sample_date, data=meta.data.lp.sev.sev)
+leveneTest(Shannon~sample_date, data=meta.data.lp.sev.sev)
+leveneTest(Simpson~sample_type, data=meta.data.lp.sev.sev)
+leveneTest(Shannon~sample_type, data=meta.data.lp.sev.sev)
+
+
+#test
+shan.lp.sev<-lm(Shannon~Severity*sample_date*sample_type, data=meta.data.lp.sev.sev)
+simp.lp.sev<-lm(Simpson~Severity*sample_date*sample_type, data=meta.data.lp.sev.sev)
+anova(shan.lp.sev)
+summary(shan.lp.sev)
+plot(shan.lp.sev)
+anova(simp.lp.sev)
+summary(simp.lp.sev)
+plot(simp.lp.sev)
+
+##beta
+##first I want to create two data sets one for mineral one for organic/surface 
+mineral.phylo.sev<-subset_samples(phylo, sample_type =="Mineral")
+organic.phylo.sev<-subset_samples(phylo, sample_type=="Surface")
+##now reduce to only LP-sev and sev
+min.phylo.lp.sev.sev<-subset_samples(mineral.phylo.sev, Severity == "LP-Severe"|Severity=="Severe")
+min.phylo.lp.sev.sev<-subset_samples(min.phylo.lp.sev.sev, sample_date == "May"|sample_date=="June")
+org.phylo.lp.sev.sev<-subset_samples(organic.phylo.sev, Severity == "LP-Severe"|Severity=="Severe")
+org.phylo.lp.sev.sev<-subset_samples(org.phylo.lp.sev.sev, sample_date == "May"|sample_date=="June")
+
+#create meta.data of min and org data
+sd.min.lp<-as.data.frame(sample_data(min.phylo.lp.sev.sev))
+sd.org.lp<-as.data.frame(sample_data(org.phylo.lp.sev.sev))
+class(sd.org.lp)<-NULL
+class(sd.min.lp)<-NULL
+sd.org.lp<-as.data.frame(sd.org.lp)
+sd.min.lp<-as.data.frame(sd.min.lp)
+
+sample.names.org<-sample_names(org.phylo.lp.sev.sev)
+sample.names.min<-sample_names(min.phylo.lp.sev.sev)
+
+#now helliger transform before analysis
+min.phylo.lp.sev.sev<-decostand(psotu2veg(min.phylo.lp.sev.sev), method = "hellinger")
+org.phylo.lp.sev.sev<-decostand(psotu2veg(org.phylo.lp.sev.sev), method = "hellinger")
+
+
+set.seed(13)
+##nmds on hellinger transformed data
+nmds.min.lp<-ordinate(otu_table(min.phylo.lp.sev.sev,taxa_are_rows = FALSE),method = "NMDS",distance = "bray",trymax=100)
+nmds.min.lp$stress#0.15
+stressplot(nmds.min.lp)
+
+nmds.org.lp<-ordinate(otu_table(org.phylo.lp.sev.sev,taxa_are_rows = FALSE),method = "NMDS",distance = "bray",trymax=100)
+nmds.org.lp$stress#0.088
+stressplot(nmds.org.lp)
+
+#fit the site data
+
+org.site.scrs <- as.data.frame(scores(nmds.org.lp, display = "sites")) #save NMDS results into dataframe
+org.site.scrs <- cbind(org.site.scrs, Severity = sd.org.lp$Severity) #add grouping variable "Management" to dataframe
+org.site.scrs <- cbind(org.site.scrs, Sample_Date = sd.org.lp$sample_date)#add grouping variable of cluster grouping to dataframe
+org.site.scrs <- cbind(org.site.scrs, Site = sample.names.org) #add site names as variable if you want to display on plot
+head(org.site.scrs)
+
+##now the org data for ellipse
+df_ell.org.sev <- data.frame() #sets up a data frame before running the function.
+for(g in levels(org.site.scrs$Severity)){
+  df_ell.org.sev <- rbind(df_ell.org.sev, cbind(as.data.frame(with(org.site.scrs [org.site.scrs$Severity==g,],
+                                                         veganCovEllipse(cov.wt(cbind(NMDS1,NMDS2),wt=rep(1/length(NMDS1),length(NMDS1)))$cov,center=c(mean(NMDS1),mean(NMDS2))))) ,Severity=g))
+}
+NMDS.mean.org=aggregate(org.site.scrs[ ,c("NMDS1", "NMDS2")], 
+                         list(group = org.site.scrs$Severity), mean)
+
+
+nmds.plot.org <- ggplot(org.site.scrs, aes(x=NMDS1, y=NMDS2))+ #sets up the plot
+  geom_point(aes(NMDS1, NMDS2, colour = factor(org.site.scrs$Severity), shape = factor(org.site.scrs$Sample_Date)), size = 2)+
+  coord_fixed()+
+  theme_classic()+ 
+  theme(panel.background = element_rect(fill = NA, colour = "black", size = 1, linetype = "solid"))+
+  labs(colour = "Severity", shape = "Sample_Date")+ 
+  theme(legend.position = "right", legend.text = element_text(size = 12), legend.title = element_text(size = 12), axis.text = element_text(size = 10))+ geom_path(data = df_ell.org.sev, aes(x = NMDS1, y = NMDS2, group = Severity,colour=Severity))+ theme(axis.text.x = element_blank(),axis.text.y = element_blank(),axis.ticks = element_blank())+scale_color_manual(values = c("tomato4","black"))+ scale_fill_manual(values = c("tomato4","black"))+scale_shape_manual(values = c(18,17))+ggtitle('Surface')
+nmds.plot.org
+
+#fit the site data
+
+min.site.scrs <- as.data.frame(scores(nmds.min.lp, display = "sites")) #save NMDS results into dataframe
+min.site.scrs <- cbind(min.site.scrs, Severity = sd.min.lp$Severity) #add grouping variable "Management" to dataframe
+min.site.scrs <- cbind(min.site.scrs, Sample_Date = sd.min.lp$sample_date)#add grouping variable of cluster grouping to dataframe
+min.site.scrs <- cbind(min.site.scrs, Site = sample.names.min) #add site names as variable if you want to display on plot
+head(min.site.scrs)
+
+##now the min data for ellipse
+df_ell.min.sev <- data.frame() #sets up a data frame before running the function.
+for(g in levels(min.site.scrs$Severity)){
+  df_ell.min.sev <- rbind(df_ell.min.sev, cbind(as.data.frame(with(min.site.scrs [min.site.scrs$Severity==g,],
+                                                         veganCovEllipse(cov.wt(cbind(NMDS1,NMDS2),wt=rep(1/length(NMDS1),length(NMDS1)))$cov,center=c(mean(NMDS1),mean(NMDS2))))) ,Severity=g))
+}
+NMDS.mean.min=aggregate(min.site.scrs[ ,c("NMDS1", "NMDS2")], 
+                         list(group = min.site.scrs$Severity), mean)
+
+nmds.plot.min <- ggplot(min.site.scrs, aes(x=NMDS1, y=NMDS2))+ #sets up the plot
+  geom_point(aes(NMDS1, NMDS2, colour = factor(min.site.scrs$Severity), shape = factor(min.site.scrs$Sample_Date)), size = 2)+
+  coord_fixed()+
+  theme_classic()+ 
+  theme(panel.background = element_rect(fill = NA, colour = "black", size = 1, linetype = "solid"))+
+  labs(colour = "Severity", shape = "Sample_Date")+ 
+  theme(legend.position = "none", legend.text = element_text(size = 12), legend.title = element_text(size = 12), axis.text = element_text(size = 10))+
+  geom_path(data = df_ell.min.sev, aes(x = NMDS1, y = NMDS2, group = Severity,colour=Severity))+ theme(axis.text.x = element_blank(),axis.text.y = element_blank(),axis.ticks = element_blank())+scale_color_manual(values = c("tomato4","black"))+scale_shape_manual(values = c(18,17))+ggtitle('Mineral')
+nmds.plot.min
+
+patchwork<-sev.shan.div|(nmds.plot.org /nmds.plot.min)
+#plot together
+tiff("Sev.vs.lp.tiff",res=1000,width = 9000,height = 6000)
+patchwork+plot_annotation(tag_levels = "A")
+dev.off()
+
+
+#run permutations
+set.seed(42)
+adonis.min.lp<- adonis2(min.phylo.lp.sev.sev ~ Severity * sample_date ,data = sd.min.lp, method= "bray")
+adonis.org.lp<-adonis2(org.phylo.lp.sev.sev ~ Severity * sample_date, data = sd.org.lp, method = "bray")
+
+adonis.org.lp
+adonis.min.lp
+```
+
